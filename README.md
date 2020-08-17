@@ -1,10 +1,14 @@
-Protype algrithm: &nbsp; &nbsp; &nbsp; &nbsp; [opencloth](https://github.com/mmmovania/opencloth)
+Protype algrithm: &nbsp; &nbsp; &nbsp; &nbsp; [SPlisHSPlasH](https://github.com/InteractiveComputerGraphics/SPlisHSPlasH)
 
-Line render algrithm: &nbsp; [bresenham](https://github.com/miloyip/line/blob/master/line_bresenham.c)
+Circle render algrithm: &nbsp; [bresenham](https://www.geeksforgeeks.org/bresenhams-circle-drawing-algorithm/)
 
 Persepective algrithm: &nbsp;[microsoft d3dx](https://docs.microsoft.com/enus/windows/win32/direct3d9/d3dxmatrixperspectiverh)
 
-![image](https://github.com/lyd405121/OpenClothPy/blob/master/cloth.gif)
+Neighborhood algrithm:
+![image](https://github.com/lyd405121/wcsph/blob/master/sesph.gif)
+
+Pcisph implement:
+![image](https://github.com/lyd405121/wcsph/blob/master/pcisph.gif)
 
  
 
