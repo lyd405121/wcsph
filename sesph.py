@@ -510,12 +510,12 @@ while gui.running:
     gui.set_image(img.to_numpy())
     gui.show()
     frame += 1
-    ti.imwrite(img, str(frame)+ ".png")
 
+    #ti.imwrite(img, str(frame)+ ".png")
     #print(rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
     
 
-    if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= 1500:
+    if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= 2000:
         print(rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         ti.imwrite(img, "done.png")
         sys.exit()
