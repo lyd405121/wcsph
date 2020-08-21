@@ -19,8 +19,8 @@ gui = ti.GUI('wcsph', res=(imgSize,imgSize))
 test_id = 0
 maxNeighbour = 32
 
-
-gridR       = 0.05
+particleRadius = 0.025
+gridR       = particleRadius * 2.0
 searchR     = gridR*2.0
 invGridR    = 1.0 / gridR
 boundary    = 2.0
@@ -28,39 +28,36 @@ blockSize   = int(boundary * invGridR)
 doublesize  = blockSize*blockSize
 gridSize    = blockSize*blockSize*blockSize
 
-particleDimX = 12
-particleDimY = 12
-particleDimZ = 12
+particleDimX = 20
+particleDimY = 20
+particleDimZ = 20
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
 particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*(blockSize-2)*2 
 particleNum        = particleLiquidNum + particleSolidNum
 
-rho         = ti.var( dt=ti.f32, shape=(particleNum))
-pressure    = ti.var( dt=ti.f32, shape=(particleNum))
 
-inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
+
+
+
+rho         = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+
+vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+
+neighborCount = ti.var(dt=ti.i32, shape=(particleLiquidNum))
+neighbor      = ti.var(dt=ti.i32, shape=(particleLiquidNum, maxNeighbour))
 
 pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-vel         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-
-
+inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
 gridCount     = ti.var(dt=ti.i32, shape=(gridSize))
 grid          = ti.var(dt=ti.i32, shape=(gridSize, maxNeighbour))
-neighborCount = ti.var(dt=ti.i32, shape=(particleNum))
-neighbor      = ti.var(dt=ti.i32, shape=(particleNum, maxNeighbour))
+
 
 
 print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
 
 
-@ti.func
-def get_length3(v):
-    return ti.sqrt(v.x*v.x+v.y*v.y+v.z*v.z)
-
-@ti.func
-def get_length2(v):
-    return ti.sqrt(v.x*v.x+ v.y*v.y)
 
 @ti.func
 def clamp(v, low_limit, up_limit):
@@ -208,6 +205,8 @@ def draw_point(v, c):
     fill_pixel(Centre, 0.0, c)
                 
 
+
+
 @ti.func
 def gradW(r):
     res = ti.Vector([0.0, 0.0, 0.0])
@@ -241,40 +240,28 @@ def W_norm(v):
 @ti.func
 def W(v):
     return W_norm(v.norm())
-    
-  
-    
-    
-@ti.kernel
-def reset_particle():
-    for i in pos:
-        if i < particleLiquidNum:
-            aa = particleDimZ*particleDimY
-            x = i//aa
-            y = (i%aa)//particleDimZ
-            z = i%particleDimZ
-            pos[i]     = ti.cast(ti.Vector([x, y, z]),ti.f32)
-            percent    = ti.cast(ti.Vector([particleDimX, particleDimY, particleDimZ]), ti.f32)
-            pos[i]     = (pos[i] / percent  * 2.0-1.0 + 1.0 / percent) * ti.Vector([float(particleDimX)* gridR, float(particleDimY)* gridR, float(particleDimZ)* gridR]) * 0.7
-            vel[i]     = ti.Vector([0.0, -1.0, 0.0])
-        
-        
-@ti.kernel
-def clear_canvas():
-    for i, j in img:
-        img[i, j]=ti.Vector([0, 0, 0])
-        depth[i, j] = 1.0
-        
 
 @ti.kernel
-def clear_grid():
-    for i,j in grid:
-        grid[i,j] = -1
+def reset_particle():
+
+    for i in vel:
+        vel[i]      = ti.Vector([0.0, 0.0, 0.0])
+        pressure[i] = 0.0
+
+        aa = particleDimZ*particleDimY
+        x = i//aa
+        y = (i%aa)//particleDimZ
+        z = i%particleDimZ
+        pos[i]      = ti.cast(ti.Vector([x, y, z]),ti.f32) * particleRadius*2.0 + ti.Vector([0.0, -0.9, 0.0])
+
+
+
+    for i in gridCount:
         gridCount[i]=0
 
         index      = ti.Vector([i//doublesize, (i%doublesize)//blockSize, i%blockSize])
         xyz        = (float(index) * gridR - boundary/2.0  + gridR * 0.5) * ( boundary / (boundary- gridR*1.5) )
-
+        
         if index.x == 0:
             solidIndex  = particleLiquidNum + index.y * blockSize + index.z
             pos[solidIndex]     = xyz
@@ -292,11 +279,26 @@ def clear_grid():
             pos[solidIndex]     = xyz
 
         elif index.z == 0:
-            solidIndex  = particleLiquidNum +  doublesize*2 + (blockSize-2)*blockSize*2 + (index.x-1) * (blockSize-2) + index.y
+            solidIndex  = particleLiquidNum +  doublesize*2 + (blockSize-2)*blockSize*2 + (index.x-1) * (blockSize-2) + index.y-1
             pos[solidIndex]     = xyz
         elif index.z == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize*2 + (blockSize-2) * (blockSize-2) + (index.x-1) * (blockSize-2) + index.y
+            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize*2 + (blockSize-2) * (blockSize-2) + (index.x-1) * (blockSize-2) + index.y-1
             pos[solidIndex]     = xyz
+
+        
+        
+@ti.kernel
+def clear_canvas():
+    for i, j in img:
+        img[i, j]=ti.Vector([0, 0, 0])
+        depth[i, j] = 1.0
+        
+
+@ti.kernel
+def clear_grid():
+    for i,j in grid:
+        grid[i,j] = -1
+        gridCount[i]=0
 
 
 @ti.kernel
@@ -319,8 +321,6 @@ def reset_neighbor():
     for i,j in neighbor:
         neighbor[i,j]    = -1
         neighborCount[i] = 0
-        
-        
 
 @ti.func
 def insert_neighbor(i, colj):
@@ -329,10 +329,9 @@ def insert_neighbor(i, colj):
         while k < gridCount[colj]:
             j = grid[colj, k]
             if j >= 0 and (i != j):
+                #print( "posi:", pos[i],  "posj:", pos[j])
 
-                pi = pos[i]
-                pj = pos[j]
-                r = pi - pj
+                r = pos[i] - pos[j]
                 r_mod = r.norm()
                 if r_mod < searchR:
                     old = ti.atomic_add(neighborCount[i] , 1)
@@ -345,60 +344,67 @@ def insert_neighbor(i, colj):
 
 @ti.kernel
 def find_neighbour():
-    for i in pos:
-        if i < particleLiquidNum:
-            index = inedxInGrid[i]
+    for i in neighborCount:
+        index = inedxInGrid[i]
 
-            insert_neighbor(i, index)
-            insert_neighbor(i, index-1)
-            insert_neighbor(i, index+1) 
-            insert_neighbor(i, index+doublesize)
-            insert_neighbor(i, index-doublesize)
-            insert_neighbor(i, index+blockSize)
-            insert_neighbor(i, index-blockSize)     
+        insert_neighbor(i, index)
+        insert_neighbor(i, index-1)
+        insert_neighbor(i, index+1) 
+        insert_neighbor(i, index+doublesize)
+        insert_neighbor(i, index-doublesize)
+        insert_neighbor(i, index+blockSize)
+        insert_neighbor(i, index-blockSize)     
 
-            insert_neighbor(i, index+doublesize+blockSize)
-            insert_neighbor(i, index+doublesize-blockSize)
-            insert_neighbor(i, index-doublesize+blockSize)
-            insert_neighbor(i, index-doublesize-blockSize)  
+        insert_neighbor(i, index+doublesize+blockSize)
+        insert_neighbor(i, index+doublesize-blockSize)
+        insert_neighbor(i, index-doublesize+blockSize)
+        insert_neighbor(i, index-doublesize-blockSize)  
 
-            insert_neighbor(i, index+doublesize+1)
-            insert_neighbor(i, index-doublesize+1)
-            insert_neighbor(i, index+blockSize+1)
-            insert_neighbor(i, index-blockSize+1)       
-            insert_neighbor(i, index+doublesize-1)
-            insert_neighbor(i, index-doublesize-1)
-            insert_neighbor(i, index+blockSize-1)
-            insert_neighbor(i, index-blockSize-1)     
+        insert_neighbor(i, index+doublesize+1)
+        insert_neighbor(i, index-doublesize+1)
+        insert_neighbor(i, index+blockSize+1)
+        insert_neighbor(i, index-blockSize+1)       
+        insert_neighbor(i, index+doublesize-1)
+        insert_neighbor(i, index-doublesize-1)
+        insert_neighbor(i, index+blockSize-1)
+        insert_neighbor(i, index-blockSize-1)     
 
-            insert_neighbor(i, index+doublesize+blockSize+1)
-            insert_neighbor(i, index+doublesize-blockSize+1)
-            insert_neighbor(i, index-doublesize+blockSize+1)
-            insert_neighbor(i, index-doublesize-blockSize+1)
-            insert_neighbor(i, index+doublesize+blockSize-1)
-            insert_neighbor(i, index+doublesize-blockSize-1)
-            insert_neighbor(i, index-doublesize+blockSize-1)
-            insert_neighbor(i, index-doublesize-blockSize-1)
-        
+        insert_neighbor(i, index+doublesize+blockSize+1)
+        insert_neighbor(i, index+doublesize-blockSize+1)
+        insert_neighbor(i, index-doublesize+blockSize+1)
+        insert_neighbor(i, index-doublesize-blockSize+1)
+        insert_neighbor(i, index+doublesize+blockSize-1)
+        insert_neighbor(i, index+doublesize-blockSize-1)
+        insert_neighbor(i, index-doublesize+blockSize-1)
+        insert_neighbor(i, index-doublesize-blockSize-1)
+
+
+
 @ti.kernel
 def update_delta_density():
     for i in rho:
-        rho[i]           = rho_0
+        rho[i]           = VL0 *W_norm(0.0)
         cur_neighbor = neighborCount[i]
         k=0
+
         while k < cur_neighbor:
             j = neighbor[i, k]
-            pi = pos[i]
-            pj = pos[j]
-            r = pi - pj
-            rho[i]     +=  W(r) +  (vel[i] - vel[j]).dot(gradW(r)) * deltaT
+            r = pos[i] - pos[j]
+            d_den = W(r)
+            if j < particleLiquidNum:
+                rho[i] += VL0 * d_den  
+            else:
+                rho[i] += VS0 * d_den
             k += 1
+        rho[i] *= rho_0
         
 
 
 @ti.kernel
 def update_pressure():
     for i in rho:
+        rho[i] = ti.max(rho[i], rho_0)
+
         q = rho[i] / rho_0
         qq = q*q
         qqqq = qq*qq
@@ -417,8 +423,13 @@ def compute_force():
             r = pi - pj
             grad  = gradW(r)
 
-            d_vel[i] +=  0.5 / rho[j] * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR)*grad 
-            d_vel[i] +=  -(pressure[i] / (rho[i]*rho[i]) + pressure[j] / (rho[j]*rho[j])) * grad
+            if j < particleLiquidNum:
+                d_vel[i] +=  visorcity / rho_0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR)*grad 
+                d_vel[i] +=  -rho_0 * VL0 * (pressure[i] / (rho[i]*rho[i]) + pressure[j] / (rho[j]*rho[j])) * grad
+            else:
+                d_vel[i] += visorcity /  rho_0 * vel[i].dot(r) / (r.norm_sqr() + 0.01*searchR*searchR)*grad 
+                d_vel[i] +=  -rho_0 * VS0 * (pressure[i] / (rho[i]*rho[i])+ pressure[i] / (rho_0*rho_0))  * grad
+
             k += 1
 
     
@@ -437,7 +448,7 @@ def draw_particle():
         if i < particleLiquidNum:
             draw_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
         elif i < particleLiquidNum + doublesize *2 + blockSize*(blockSize-2)*2:
-            draw_sphere(pos[i], ti.Vector([0.5,0.0,0.5]))
+            draw_sphere(pos[i], ti.Vector([0.3,0.3,0.3]))
 
 @ti.kernel
 def draw_grid():
@@ -471,19 +482,25 @@ up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
 collisionC = ti.Vector([0.0, 3.0, 0.0])
 
-deltaT     = 0.001
+deltaT     = 0.0001
 fov        = 2.0
 near       = 1.0
 far        = 1000.0
 
 stiffness = 50000.0
-rho_0 = 5000.0
+rho_0     = 1000.0
+visorcity = 0.01
+VL0       = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
+VS0       = VL0 * 2.0
+
 pi = 3.1415926
 h3 = searchR*searchR*searchR
 m_k = 8.0  / (pi*h3)
 m_l = 48.0 / (pi*h3)
-    
+
+iterNum = 0.03 /  deltaT
 frame = 0
+totalFrame = 120
 
 reset_particle()
 clear_canvas()
@@ -494,30 +511,23 @@ while gui.running:
     reset_neighbor()
     find_neighbour()
 
-
     update_delta_density()
     update_pressure()
     compute_force()
-
-    
     integrator_sesph()
 
-    clear_canvas()
-    draw_grid()
-    draw_particle()
-    
-
+    if frame % iterNum == 0:
+        clear_canvas()
+        #draw_grid()
+        draw_particle()
+        #ti.imwrite(img, str(frame//iterNum)+ ".png")
+        
     gui.set_image(img.to_numpy())
     gui.show()
     frame += 1
 
-    #ti.imwrite(img, str(frame)+ ".png")
-    #print(rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
-    
-
-    if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= 2000:
+    if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= totalFrame * iterNum:
         print(rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
-        ti.imwrite(img, "done.png")
         sys.exit()
 
 

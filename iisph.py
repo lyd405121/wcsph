@@ -28,6 +28,7 @@ blockSize   = int(boundary * invGridR)
 doublesize  = blockSize*blockSize
 gridSize    = blockSize*blockSize*blockSize
 
+
 particleDimX = 20
 particleDimY = 20
 particleDimZ = 20
@@ -35,20 +36,23 @@ particleLiquidNum  = particleDimX*particleDimY*particleDimZ
 particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*(blockSize-2)*2 
 particleNum        = particleLiquidNum + particleSolidNum
 
+mass        = ti.var( dt=ti.f32, shape=(particleNum))
 pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
 inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
 
-pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-d_vel_pre   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+a_ii        = ti.var(dt=ti.f32, shape=(particleLiquidNum))
+d_ii        = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+dij_pj      = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
 debug_value = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-rho_err     = ti.var( dt=ti.f32, shape=(1))
+avg_density_err = ti.var( dt=ti.f32, shape=(1))
 
+pressure_pre    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
 rho         = ti.var( dt=ti.f32, shape=(particleLiquidNum))
 d_rho       = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-pos_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 vel_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
 
@@ -61,7 +65,6 @@ gridCount     = ti.var(dt=ti.i32, shape=(gridSize))
 grid          = ti.var(dt=ti.i32, shape=(gridSize, maxNeighbour))
 
 print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
-
 
 
 @ti.func
@@ -194,6 +197,7 @@ def draw_point(v, c):
                 
 
 
+
 @ti.func
 def gradW(r):
     res = ti.Vector([0.0, 0.0, 0.0])
@@ -232,7 +236,10 @@ def W(v):
 def reset_particle():
 
     for i in vel:
+        mass[i]     = 1.0
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
+        pressure[i] = 0.0
+
         aa = particleDimZ*particleDimY
         x = i//aa
         y = (i%aa)//particleDimZ
@@ -365,11 +372,13 @@ def find_neighbour():
 
 
 
+
 @ti.kernel
 def compute_nonpressure_force():
     for i in d_vel:
+
         d_vel[i] = gravity
-        rho[i]  = VL0 * W_norm(0.0) * rho_0 
+        rho[i]  = VL0 * W_norm(0.0) * rho_L0 
 
         cur_neighbor     = neighborCount[i]
         k=0
@@ -378,176 +387,203 @@ def compute_nonpressure_force():
             r = pos[i] - pos[j]
 
             if j < particleLiquidNum:
-                rho[i]     += VL0 * W(r) * rho_0 
-                d_vel[i]   += visorcity / rho_0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
+                rho[i]     += VL0 * W(r) * rho_L0 
+                d_vel[i]   += visorcity / rho_L0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
             else:
-                rho[i]     += VS0 * W(r) * rho_0
-                d_vel[i]   += visorcity / rho_0 * vel[i] .dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
+                rho[i]     += VS0 * W(r) * rho_S0
+                d_vel[i]   += visorcity / rho_S0 * vel[i] .dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
             
             k += 1
-        vel_star[i]  = vel[i]
-        pos_star[i]  = pos[i]
-        d_vel_pre[i] = ti.Vector([0.0, 0.0, 0.0])
 
+@ti.kernel
+def compute_init_coff():
+
+    for i in vel:
+        vel[i]  += d_vel[i] * deltaT
+
+    for i in d_ii:
+        d_ii[i] = ti.Vector([0.0, 0.0, 0.0])
+
+        cur_neighbor = neighborCount[i]
+        k=0
+        while k < cur_neighbor:
+            j  = neighbor[i, k]
+            r = pos[i] - pos[j]
+            gradV       = gradW(r)
+
+            inv_den     = rho_L0 / rho[i] 
+            d_ii[i]     +=  -VL0 * inv_den * inv_den * gradV
+            k += 1
+
+
+
+    for i in a_ii:
+        a_ii[i] = 0.0
+        density = rho[i] / rho_L0
+        d_rho[i] = density
+        pressure_pre[i] = 0.5 * pressure[i]
+
+        cur_neighbor = neighborCount[i]
+        k=0
+
+        while k < cur_neighbor:
+            j  = neighbor[i, k]
+            r = pos[i] - pos[j]
+            gradV       = gradW(r)
+            
+
+            if j < particleLiquidNum:
+                d_rho[i]     +=  deltaT *  VL0 * ((vel[i] - vel[j]).dot(gradV))
+            else:
+                d_rho[i]     +=  deltaT *  VS0 * (vel[i] .dot(gradV))
+
+
+            d_ji = VL0 / (density*density) * gradV
+            a_ii[i]     +=   VL0 * (d_ii[i] -  d_ji).dot(gradV)
+            k += 1
 
 @ti.kernel
 def update_iter_info():
-    for i in vel_star:
-        vel_star[i]  = vel[i] + (d_vel[i]+d_vel_pre[i])  * deltaT
-        pos_star[i]  = pos[i] + vel_star[i]  * deltaT
+    for i in dij_pj:
 
-        rho_err[i]   = 0.0
-        pressure[i]  = 0.0
+        avg_density_err[0] = 0.0
+        dij_pj[i] = ti.Vector([0.0, 0.0, 0.0])
+        cur_neighbor = neighborCount[i]
+        k=0
+
+        while k < cur_neighbor:
+            j = neighbor[i, k]
+            if j < particleLiquidNum:
+                r = pos[i] - pos[j]
+                gradV=gradW(r)
+                densityj = rho[j] / rho_L0
+                dij_pj[i] += -VL0/(densityj*densityj)*pressure_pre[j]*gradV
+            k += 1
 
 @ti.kernel
-def predict_density():
-    for i in rho:
-        d_rho[i] = VL0 * W_norm(0.0)
-
-        cur_neighbor     = neighborCount[i]
+def update_pressure_force():
+    for i in pressure:
+        sum=0.0
+        cur_neighbor = neighborCount[i]
         k=0
+
         while k < cur_neighbor:
             j = neighbor[i, k]
             r = pos[i] - pos[j]
-            WW = W(r)
+            gradV       = gradW(r)
+
             if j < particleLiquidNum:
-                d_rho[i]     += VL0 * WW
+                density = rho[i] / rho_L0
+                dji = VL0 / (density*density) * gradV
+                d_ji_pi = dji *  pressure_pre[i]
+                d_jk_pk = dij_pj[j] 
+                sum +=  VL0 * ( dij_pj[i] - d_ii[i]*pressure_pre[i] - (d_jk_pk - d_ji_pi)).dot(gradV)
             else:
-                d_rho[i]     += VS0 * WW
+                sum +=  VS0 * dij_pj[i].dot(gradV)
             k += 1
 
-        d_rho[i] = ti.max(d_rho[i], 1.0)
-        pressure[i] += pci_coff * (d_rho[i]-1.0) / (deltaT * deltaT)
-        rho_err[0]  += d_rho[i]-1.0
 
-    for i in d_vel_pre:
-        d_vel_pre[i]      = ti.Vector([0.0, 0.0, 0.0])
+        b = 1.0 - d_rho[i]
+        h2     = deltaT * deltaT
+
+        denom = a_ii[i]*h2
+        if (ti.abs(denom) > 1.0e-9):
+            pressure[i] = ti.max(    (1.0 - omega) *pressure_pre[i] + omega / denom * (b - h2*sum), 0.0)
+            #print( d_rho[i],rho[i] / rho_L0, h2*sum, omega / denom)
+        else:
+            pressure[i] = 0.0
+        
+        if pressure[i] != 0.0:
+            avg_density_err[0] += (a_ii[i]*pressure[i]  + sum)*h2 - b
+        pressure_pre[i] = pressure[i]
+        
+@ti.kernel
+def update_pos():
+
+    for i in d_vel:
+        d_vel[i]      = ti.Vector([0.0, 0.0, 0.0])
 
         cur_neighbor = neighborCount[i]
         k=0
         while k < cur_neighbor:
             j = neighbor[i, k]
-            pi = pos_star[i]
-            pj = pos[j]
-            if j < particleLiquidNum:
-                pj = pos_star[j]
+            r = pos[i] - pos[j]
+            gradV       = gradW(r)
 
-            gradV       = gradW(pi - pj)
-            dpi = pressure[i] 
+            density_i = rho[i]/ rho_L0
+            dpi = pressure[i] / (density_i*density_i)
             if j < particleLiquidNum:
-                dpj = pressure[j] 
-                d_vel_pre[i]   +=  - VL0 * (dpi + dpj) * gradV
+                density_j = rho[j]/ rho_L0
+                dpj = pressure[j] / (density_j*density_j)
+                d_vel[i]   +=  - VL0 * (dpi + dpj) * gradV
             else:
-                d_vel_pre[i]   +=  - VS0 * dpi  * gradV
+                d_vel[i]   +=  - VS0 * dpi  * gradV
             k += 1
 
-
-@ti.kernel
-def update_pos():
     for i in vel:
-        vel[i]  += (d_vel[i]+d_vel_pre[i]) * deltaT
+        vel[i]  += d_vel[i] * deltaT
         pos[i]  += vel[i]  * deltaT
 
 @ti.kernel
 def draw_particle():
     for i in pos:
         if i < particleLiquidNum:
-            #draw_solid_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
             draw_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
         elif i < particleLiquidNum + doublesize *2 + blockSize*(blockSize-2)*2:
             draw_sphere(pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
-eye        = ti.Vector([0.0, 0.0, 3.0])
+eye        = ti.Vector([0.0, 0.0, 2.0])
 target     = ti.Vector([0.0, 0.0, 0.0])
 up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
-collisionC = ti.Vector([0.0, 3.0, 0.0])
 
-deltaT     = 0.001
+deltaT     = 0.005
 fov        = 2.0
 near       = 1.0
 far        = 1000.0
 
+omega = 0.5
 visorcity = 0.02
-rho_0 = 1000.0
+
+rho_L0 = 1000.0
+rho_S0 = rho_L0
 VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
 VS0    = VL0 * 2.0
+#VS0    = -0.05
 
-pi = 3.1415926
-h3 = searchR*searchR*searchR
-m_k = 8.0  / (pi*h3)
-m_l = 48.0 / (pi*h3)
-    
+pi    = 3.1415926
+h3    = searchR*searchR*searchR
+m_k   = 8.0  / (pi*h3)
+m_l   = 48.0 / (pi*h3)
 frame = 0
 iterNum = 0.03 /  deltaT
 totalFrame = 120
 
-def CpuGradW(r):
-    res = np.array([0.0, 0.0, 0.0])
-    rl =np.linalg.norm(r)
-    q = rl / searchR
-    if ((rl > 1.0e-5) and (q <= 1.0)):
-    	gradq = r / ( rl*searchR)
-    	if (q <= 0.5):
-    		res = m_l*q*(3.0*q - 2.0)*gradq
-    	else:
-    		factor = 1.0 - q
-    		res = -m_l*(factor*factor)*gradq
-    return res
-
-def GetPciCoff():
-    supportRadius = searchR
-    diam = 2.0 * particleRadius
-    sumGradW         = np.array([0.0, 0.0, 0.0])
-    sumGradW2     = 0.0
-    V00 = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
-
-    xi = np.array([0.0, 0.0, 0.0])
-    xj = np.array([-supportRadius, -supportRadius, -supportRadius])
-    while (xj[0] <= supportRadius):
-        while (xj[1] <= supportRadius):
-            while (xj[2] <= supportRadius):
-                r = xi-xj
-                dist = np.linalg.norm(r)
-                if(dist < supportRadius):
-                    grad = CpuGradW(r)
-                    sumGradW += grad
-                    dist_grad = np.linalg.norm(grad)
-                    sumGradW2 += dist_grad*dist_grad
-                xj[2] += diam
-            xj[1] += diam
-            xj[2] = -supportRadius
-        xj[0] += diam
-        xj[1] = -supportRadius
-        xj[2] = -supportRadius
-
-    beta = 2.0 * V00*V00
-    dist_sumgrad = np.linalg.norm(sumGradW)
-    return 1.0 / (beta * (dist_sumgrad*dist_sumgrad  + sumGradW2))
-
-pci_coff = GetPciCoff()
 reset_particle()
 clear_canvas()
-
 while gui.running:
+    
     clear_grid()
     update_grid()
     reset_neighbor()
     find_neighbour()
 
+    
     compute_nonpressure_force()
+    compute_init_coff()
+    
 
     iter = 0
     err  = 0.0
-    while (err >  0.001 or iter < 3) and (iter < 10):
+    while (err > 0.0001 or iter < 3) and (iter < 10):
         update_iter_info()
-        predict_density()
-        err = rho_err.to_numpy()[0] / float(particleLiquidNum)
+        update_pressure_force()
+        
+        err = avg_density_err.to_numpy()[0] / float(particleLiquidNum)
         iter += 1
 
     update_pos()
-    
 
     if frame % iterNum == 0:
         clear_canvas()
@@ -558,8 +594,7 @@ while gui.running:
     gui.show()
     frame += 1
     
-
-    #ti.imwrite(img, str(frame)+ ".png")
+    #print(d_rho.to_numpy()[test_id], rho.to_numpy()[test_id])
 
     # create a PLYWriter
     #np_pos = np.reshape(pos.to_numpy(), (particleLiquidNum, 3))
@@ -567,7 +602,7 @@ while gui.running:
     #writer.add_vertex_pos(np_pos[:, 0], np_pos[:, 1], np_pos[:, 2])
     #writer.export_frame(frame, "wcsph.ply")
 
-
+    
     if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= totalFrame * iterNum:
         print(d_rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         sys.exit()
