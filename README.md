@@ -22,7 +22,13 @@ iisph show:
 
 ![image](https://github.com/lyd405121/wcsph/blob/master/visorcity.gif)
 
- 
+poisson disk sample with obj file:
+
+![image](https://github.com/lyd405121/wcsph/blob/master/boundtry.gif)
+
+iisph with complicated boundary:
+
+![image](https://github.com/lyd405121/wcsph/blob/master/taichi.gif)
 
 
 
