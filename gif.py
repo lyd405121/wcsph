@@ -16,8 +16,14 @@ def create_gif(filenames, duration):
 
 if __name__ == "__main__":
     filenames = []
-    for i in range(1, 120):
+
+    for i in range(60):
         ff = float(i)
         filenames.append(str(ff)+ ".png")
 
+
+    '''
+    for i in range(72):
+        filenames.append(str(i)+ ".png")
+    '''
     create_gif(filenames, 0.1)

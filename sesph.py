@@ -11,7 +11,7 @@ ti.init(arch=ti.gpu,advanced_optimization=True)
 imgSize = 512
 screenRes = ti.Vector([imgSize, imgSize])
 img = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
-depth = ti.var(dt=ti.f32, shape=[imgSize,imgSize])
+depth = ti.field(dtype=ti.f32, shape=[imgSize,imgSize])
 gui = ti.GUI('wcsph', res=(imgSize,imgSize))
 
 
@@ -39,19 +39,19 @@ particleNum        = particleLiquidNum + particleSolidNum
 
 
 
-rho         = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
-neighborCount = ti.var(dt=ti.i32, shape=(particleLiquidNum))
-neighbor      = ti.var(dt=ti.i32, shape=(particleLiquidNum, maxNeighbour))
+neighborCount = ti.field(dtype=ti.i32, shape=(particleLiquidNum))
+neighbor      = ti.field(dtype=ti.i32, shape=(particleLiquidNum, maxNeighbour))
 
 pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
-gridCount     = ti.var(dt=ti.i32, shape=(gridSize))
-grid          = ti.var(dt=ti.i32, shape=(gridSize, maxNeighbour))
+inedxInGrid = ti.field( dtype=ti.i32, shape=(particleNum))
+gridCount     = ti.field(dtype=ti.i32, shape=(gridSize))
+grid          = ti.field(dtype=ti.i32, shape=(gridSize, maxNeighbour))
 
 
 

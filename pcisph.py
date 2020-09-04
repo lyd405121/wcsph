@@ -11,7 +11,7 @@ ti.init(arch=ti.gpu,advanced_optimization=True)
 imgSize = 512
 screenRes = ti.Vector([imgSize, imgSize])
 img = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
-depth = ti.var(dt=ti.f32, shape=[imgSize,imgSize])
+depth = ti.field(dtype=ti.f32, shape=[imgSize,imgSize])
 gui = ti.GUI('wcsph', res=(imgSize,imgSize))
 
 
@@ -36,29 +36,29 @@ particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*
 particleNum        = particleLiquidNum + particleSolidNum
 
 pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
+inedxInGrid = ti.field( dtype=ti.i32, shape=(particleNum))
 
-pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel_pre   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
-debug_value = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-rho_err     = ti.var( dt=ti.f32, shape=(1))
+debug_value = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+rho_err     = ti.field( dtype=ti.f32, shape=(1))
 
-rho         = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-d_rho       = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+d_rho       = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 pos_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 vel_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
 
 
 
-neighborCount = ti.var(dt=ti.i32, shape=(particleLiquidNum))
-neighbor      = ti.var(dt=ti.i32, shape=(particleLiquidNum, maxNeighbour))
+neighborCount = ti.field(dtype=ti.i32, shape=(particleLiquidNum))
+neighbor      = ti.field(dtype=ti.i32, shape=(particleLiquidNum, maxNeighbour))
 
-gridCount     = ti.var(dt=ti.i32, shape=(gridSize))
-grid          = ti.var(dt=ti.i32, shape=(gridSize, maxNeighbour))
+gridCount     = ti.field(dtype=ti.i32, shape=(gridSize))
+grid          = ti.field(dtype=ti.i32, shape=(gridSize, maxNeighbour))
 
 print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
 

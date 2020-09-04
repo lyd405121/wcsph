@@ -8,11 +8,12 @@ import numpy as np
 
 #ti.init(arch=ti.gpu,advanced_optimization=False)
 ti.init(arch=ti.gpu,advanced_optimization=True)
-imgSize = 512
-screenRes = ti.Vector([imgSize, imgSize])
-img = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
-depth = ti.var(dt=ti.f32, shape=[imgSize,imgSize])
-gui = ti.GUI('wcsph', res=(imgSize,imgSize))
+imgSizeX = 720
+imgSizeY = 480
+screenRes = ti.Vector([imgSizeX, imgSizeY])
+img = ti.Vector(3, dt=ti.f32, shape=[imgSizeX, imgSizeY])
+depth = ti.field(dtype=ti.f32, shape=[imgSizeX, imgSizeY])
+gui = ti.GUI('wcsph', res=(imgSizeX, imgSizeY))
 
 
 
@@ -29,43 +30,87 @@ doublesize  = blockSize*blockSize
 gridSize    = blockSize*blockSize*blockSize
 
 
-particleDimX = 20
-particleDimY = 20
-particleDimZ = 20
+particleDimX = 24
+particleDimY = 12
+particleDimZ = 12
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
-particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*(blockSize-2)*2 
-particleNum        = particleLiquidNum + particleSolidNum
 
-mass        = ti.var( dt=ti.f32, shape=(particleNum))
-pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-inedxInGrid = ti.var( dt=ti.i32, shape=(particleNum))
+particleSolidNum   = 0
+particleNum        = 0
+
+mass        = ti.field( dtype=ti.f32)
+pos         = ti.Vector(3, dt=ti.f32)
+inedxInGrid = ti.field( dtype=ti.i32)
 
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-a_ii        = ti.var(dt=ti.f32, shape=(particleLiquidNum))
+a_ii        = ti.field(dtype=ti.f32, shape=(particleLiquidNum))
 d_ii        = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 dij_pj      = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
-debug_value = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-avg_density_err = ti.var( dt=ti.f32, shape=(1))
+debug_value = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+avg_density_err = ti.field( dtype=ti.f32, shape=(1))
 
-pressure_pre    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-pressure    = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-rho         = ti.var( dt=ti.f32, shape=(particleLiquidNum))
-d_rho       = ti.var( dt=ti.f32, shape=(particleLiquidNum))
+pressure_pre    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+d_rho       = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 vel_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
 
 
 
-neighborCount = ti.var(dt=ti.i32, shape=(particleLiquidNum))
-neighbor      = ti.var(dt=ti.i32, shape=(particleLiquidNum, maxNeighbour))
+neighborCount = ti.field(dtype=ti.i32, shape=(particleLiquidNum))
+neighbor      = ti.field(dtype=ti.i32, shape=(particleLiquidNum, maxNeighbour))
 
-gridCount     = ti.var(dt=ti.i32, shape=(gridSize))
-grid          = ti.var(dt=ti.i32, shape=(gridSize, maxNeighbour))
+gridCount     = ti.field(dtype=ti.i32, shape=(gridSize))
+grid          = ti.field(dtype=ti.i32, shape=(gridSize, maxNeighbour))
 
-print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
 
+
+
+def load_boundry(filename):
+    vertices = []
+    for line in open(filename, "r"):
+        if line.startswith('#'): continue
+        values = line.split()
+        if not values: continue
+        if values[0] == 'v':
+            v = list(map(float, values[1:4]))
+            vertices.append(v)
+
+    global particleLiquidNum
+    global particleNum
+    global particleSolidNum
+    particleSolidNum = len(vertices)
+    particleNum = particleSolidNum + particleLiquidNum
+
+    ti.root.dense(ti.i, particleNum ).place(mass)
+    ti.root.dense(ti.i, particleNum ).place(pos)
+    ti.root.dense(ti.i, particleNum ).place(inedxInGrid)
+
+
+        
+
+    arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
+    for i in range(particleNum):
+        if i < particleLiquidNum:
+
+            aa = particleDimZ*particleDimY
+            x = float(i//aa - particleDimX / 2)
+            y = float((i%aa)//particleDimZ)
+            z = float(i%particleDimZ - particleDimZ/2)
+            arrV[i, 0]  = x * particleRadius*2.0 
+            arrV[i, 1]  = y * particleRadius*2.0 + 0.5
+            arrV[i, 2]  = z * particleRadius*2.0 
+        else:
+            arrV[i, 0] = vertices[i-particleLiquidNum][0]
+            arrV[i, 1] = vertices[i-particleLiquidNum][1]
+            arrV[i, 2] = vertices[i-particleLiquidNum][2]
+
+    pos.from_numpy(arrV)
+
+    print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
 
 @ti.func
 def clamp(v, low_limit, up_limit):
@@ -98,14 +143,14 @@ def get_proj(fovY, ratio, zn, zf):
     # yScale = cot(fovY/2)  
     # xScale = yScale / aspect ratio
     
-    #yScale = 1.0    / ti.tan(fovY/2)
-    #xScale = yScale / ratio
-    #return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, zf/(zn-zf), zn*zf/(zn-zf)], [0.0, 0.0, -1.0, 0.0] ])
-    
-    #d3d ortho https://docs.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixorthorh
     yScale = 1.0    / ti.tan(fovY/2)
     xScale = yScale / ratio
-    return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(zn-zf), zn/(zn-zf)], [0.0, 0.0, 0.0, 1.0] ])
+    return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, zf/(zn-zf), zn*zf/(zn-zf)], [0.0, 0.0, -1.0, 0.0] ])
+    
+    #d3d ortho https://docs.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixorthorh
+    #yScale = 1.0    / ti.tan(fovY/2)
+    #xScale = yScale / ratio
+    #return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(zn-zf), zn/(zn-zf)], [0.0, 0.0, 0.0, 1.0] ])
     
     
 @ti.func
@@ -130,7 +175,7 @@ def get_view(eye, target, up):
 
 @ti.func
 def transform(v):
-    proj = get_proj(fov, 1.0, near, far)
+    proj = get_proj(fov, imgSizeX / imgSizeY, near, far)
     view = get_view(eye, target, up )
     
     screenP  = proj @ view @ ti.Vector([v.x, v.y, v.z, 1.0])
@@ -142,7 +187,7 @@ def transform(v):
 def fill_pixel(v, z, c):
     if (v.x >= 0) and  (v.x <screenRes.x) and (v.y >=0 ) and  (v.y < screenRes.y):
         if depth[v] > z:
-            img[v] = max(img[v], c)
+            img[v] = c
             depth[v] = z
 
 @ti.func
@@ -175,6 +220,12 @@ def draw_sphere(v, c):
             y = y-1
         x +=1
 
+
+@ti.func
+def draw_point(v,c):
+    v = transform(v)
+    Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
+    fill_pixel(Centre, v.z, c)
 
 @ti.func
 def draw_solid_sphere(v, c):
@@ -240,42 +291,6 @@ def reset_particle():
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
 
-        aa = particleDimZ*particleDimY
-        x = i//aa
-        y = (i%aa)//particleDimZ
-        z = i%particleDimZ
-        pos[i]      = ti.cast(ti.Vector([x, y, z]),ti.f32) * particleRadius*2.0 + ti.Vector([0.0, -0.9, 0.0])
-
-
-
-    for i in gridCount:
-        gridCount[i]=0
-
-        index      = ti.Vector([i//doublesize, (i%doublesize)//blockSize, i%blockSize])
-        xyz        = (float(index) * gridR - boundary/2.0  + gridR * 0.5) * ( boundary / (boundary- gridR*1.5) )
-        
-        if index.x == 0:
-            solidIndex  = particleLiquidNum + index.y * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.x == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize + index.y * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.y ==0:
-            solidIndex  = particleLiquidNum + doublesize*2 + (index.x-1) * blockSize  + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.y == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize + (index.x-1) * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.z == 0:
-            solidIndex  = particleLiquidNum +  doublesize*2 + (blockSize-2)*blockSize*2 + (index.x-1) * (blockSize-2) + index.y-1
-            pos[solidIndex]     = xyz
-        elif index.z == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize*2 + (blockSize-2) * (blockSize-2) + (index.x-1) * (blockSize-2) + index.y-1
-            pos[solidIndex]     = xyz
 
         
         
@@ -528,28 +543,32 @@ def update_pos():
 def draw_particle():
     for i in pos:
         if i < particleLiquidNum:
-            draw_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
-        elif i < particleLiquidNum + doublesize *2 + blockSize*(blockSize-2)*2:
-            draw_sphere(pos[i], ti.Vector([0.3,0.3,0.3]))
+            draw_solid_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
+
+    for i in pos:
+        if i> particleLiquidNum and pos[i].z < 0.3 and pos[i].z > -0.3 and pos[i].x < 1.12 and pos[i].x > -1.0 and pos[i].y > 0.01:
+            draw_solid_sphere(pos[i], ti.Vector([0.8,0.3,0.3]))
+        elif i> particleLiquidNum:
+            draw_point(pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
-eye        = ti.Vector([0.0, 0.0, 2.0])
-target     = ti.Vector([0.0, 0.0, 0.0])
+eye        = ti.Vector([0.5, 2.0, 2.0])
+target     = ti.Vector([0.0, 0.0, -1.0])
 up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
 
-deltaT     = 0.005
-fov        = 2.0
+deltaT     = 0.001
+fov        = 1.0
 near       = 1.0
 far        = 1000.0
 
 omega = 0.5
-visorcity = 0.02
+visorcity = 0.2
 
 rho_L0 = 1000.0
 rho_S0 = rho_L0
 VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
-VS0    = VL0 * 2.0
+VS0    = VL0 
 #VS0    = -0.05
 
 pi    = 3.1415926
@@ -557,13 +576,15 @@ h3    = searchR*searchR*searchR
 m_k   = 8.0  / (pi*h3)
 m_l   = 48.0 / (pi*h3)
 frame = 0
-iterNum = 0.03 /  deltaT
-totalFrame = 120
+iterNum = 0.02 /  deltaT
+totalFrame = 72
 
+#load_boundry("std.obj")
+load_boundry("boundry.obj")
 reset_particle()
 clear_canvas()
 while gui.running:
-    
+
     clear_grid()
     update_grid()
     reset_neighbor()
@@ -576,7 +597,7 @@ while gui.running:
 
     iter = 0
     err  = 0.0
-    while (err > 0.0001 or iter < 3) and (iter < 10):
+    while (err > 0.0001 or iter < 4) and (iter < 10):
         update_iter_info()
         update_pressure_force()
         
@@ -588,7 +609,7 @@ while gui.running:
     if frame % iterNum == 0:
         clear_canvas()
         draw_particle()
-        #ti.imwrite(img, str(frame//iterNum)+ ".png")
+        ti.imwrite(img, str(frame//iterNum)+ ".png")
 
     gui.set_image(img.to_numpy())
     gui.show()
@@ -596,13 +617,6 @@ while gui.running:
     
     #print(d_rho.to_numpy()[test_id], rho.to_numpy()[test_id])
 
-    # create a PLYWriter
-    #np_pos = np.reshape(pos.to_numpy(), (particleLiquidNum, 3))
-    #writer = ti.PLYWriter(num_vertices=particleLiquidNum)
-    #writer.add_vertex_pos(np_pos[:, 0], np_pos[:, 1], np_pos[:, 2])
-    #writer.export_frame(frame, "wcsph.ply")
-
-    
     if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= totalFrame * iterNum:
         print(d_rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         sys.exit()
