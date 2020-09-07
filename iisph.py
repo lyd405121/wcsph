@@ -101,7 +101,7 @@ def load_boundry(filename):
             y = float((i%aa)//particleDimZ)
             z = float(i%particleDimZ - particleDimZ/2)
             arrV[i, 0]  = x * particleRadius*2.0 
-            arrV[i, 1]  = y * particleRadius*2.0 + 0.5
+            arrV[i, 1]  = y * particleRadius*2.0 + 0.7
             arrV[i, 2]  = z * particleRadius*2.0 
         else:
             arrV[i, 0] = vertices[i-particleLiquidNum][0]
@@ -197,7 +197,7 @@ def draw_sphere(v, c):
     xc = ti.cast(v.x, ti.i32)
     yc = ti.cast(v.y, ti.i32)
 
-    r=3
+    r=4
     x=0
     y = r
     d = 3 - 2 * r
@@ -406,7 +406,7 @@ def compute_nonpressure_force():
                 d_vel[i]   += visorcity / rho_L0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
             else:
                 rho[i]     += VS0 * W(r) * rho_S0
-                d_vel[i]   += visorcity / rho_S0 * vel[i] .dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
+                d_vel[i]   += visorcity_b / rho_S0 * vel[i] .dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
             
             k += 1
 
@@ -552,7 +552,7 @@ def draw_particle():
             draw_point(pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
-eye        = ti.Vector([0.5, 2.0, 2.0])
+eye        = ti.Vector([0.5, 1.0, 2.0])
 target     = ti.Vector([0.0, 0.0, -1.0])
 up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
@@ -564,6 +564,7 @@ far        = 1000.0
 
 omega = 0.5
 visorcity = 0.2
+visorcity_b = 0.01
 
 rho_L0 = 1000.0
 rho_S0 = rho_L0
