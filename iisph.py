@@ -51,6 +51,12 @@ dij_pj      = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 debug_value = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 avg_density_err = ti.field( dtype=ti.f32, shape=(1))
 
+#eye        = ti.Vector([0.5, 1.0, 2.0])
+#target     = ti.Vector([0.0, 0.0, -1.0])
+
+eye        = ti.Vector(3, dt=ti.f32, shape=(1))
+target     = ti.Vector(3, dt=ti.f32, shape=(1))
+
 pressure_pre    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
@@ -176,7 +182,7 @@ def get_view(eye, target, up):
 @ti.func
 def transform(v):
     proj = get_proj(fov, imgSizeX / imgSizeY, near, far)
-    view = get_view(eye, target, up )
+    view = get_view(eye[0], target[0], up )
     
     screenP  = proj @ view @ ti.Vector([v.x, v.y, v.z, 1.0])
     screenP /= screenP.w
@@ -541,19 +547,20 @@ def update_pos():
 
 @ti.kernel
 def draw_particle():
+    
     for i in pos:
         if i < particleLiquidNum:
-            draw_solid_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
+            draw_point(pos[i], ti.Vector([1.0,1.0,1.0]))
 
     for i in pos:
         if i> particleLiquidNum and pos[i].z < 0.3 and pos[i].z > -0.3 and pos[i].x < 1.12 and pos[i].x > -1.0 and pos[i].y > 0.01:
-            draw_solid_sphere(pos[i], ti.Vector([0.8,0.3,0.3]))
+            draw_point(pos[i], ti.Vector([1.0,0.0,0.0]))
+            j = i
         elif i> particleLiquidNum:
             draw_point(pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
-eye        = ti.Vector([0.5, 1.0, 2.0])
-target     = ti.Vector([0.0, 0.0, -1.0])
+
 up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
 
@@ -577,14 +584,26 @@ h3    = searchR*searchR*searchR
 m_k   = 8.0  / (pi*h3)
 m_l   = 48.0 / (pi*h3)
 frame = 0
-iterNum = 0.02 /  deltaT
-totalFrame = 72
+iterNum = 0.01 /  deltaT
+totalFrame = 100
 
-#load_boundry("std.obj")
 load_boundry("boundry.obj")
 reset_particle()
 clear_canvas()
 while gui.running:
+
+
+    eye_np = eye.to_numpy()
+    target_np = target.to_numpy()
+    eye_np[0][0] = 0.5 - float(frame)*0.001
+    eye_np[0][1] = 1.0
+    eye_np[0][2] = 2.0 
+    target_np[0][0] = 0.0 
+    target_np[0][1] = 0.0
+    target_np[0][2] = -1.0
+    eye.from_numpy(eye_np)
+    target.from_numpy(target_np)
+
 
     clear_grid()
     update_grid()
@@ -610,7 +629,7 @@ while gui.running:
     if frame % iterNum == 0:
         clear_canvas()
         draw_particle()
-        ti.imwrite(img, str(frame//iterNum)+ ".png")
+        #ti.imwrite(img, str(frame//iterNum)+ ".png")
 
     gui.set_image(img.to_numpy())
     gui.show()
