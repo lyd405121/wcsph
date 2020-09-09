@@ -13,47 +13,53 @@ imgSizeY = 480
 screenRes = ti.Vector([imgSizeX, imgSizeY])
 img = ti.Vector(3, dt=ti.f32, shape=[imgSizeX, imgSizeY])
 depth = ti.field(dtype=ti.f32, shape=[imgSizeX, imgSizeY])
-gui = ti.GUI('wcsph', res=(imgSizeX, imgSizeY))
+gui = ti.GUI('iisph', res=(imgSizeX, imgSizeY))
 
-
-
+frame = 0
+eps = 1e-5
 test_id = 0
-maxNeighbour = 32
+maxNeighbour = 128
+average_iter = 0
 
 particleRadius = 0.025
 gridR       = particleRadius * 2.0
 searchR     = gridR*2.0
 invGridR    = 1.0 / gridR
-boundary    = 2.0
-blockSize   = int(boundary * invGridR)
-doublesize  = blockSize*blockSize
-gridSize    = blockSize*blockSize*blockSize
 
 
-particleDimX = 24
-particleDimY = 12
-particleDimZ = 12
+particleDimX = 16
+particleDimY = 8
+particleDimZ = 8
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
 
 particleSolidNum   = 0
 particleNum        = 0
 
-mass        = ti.field( dtype=ti.f32)
 pos         = ti.Vector(3, dt=ti.f32)
 inedxInGrid = ti.field( dtype=ti.i32)
 
+vel_guess   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 a_ii        = ti.field(dtype=ti.f32, shape=(particleLiquidNum))
 d_ii        = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 dij_pj      = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
-debug_value = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+
 avg_density_err = ti.field( dtype=ti.f32, shape=(1))
+cg_delta     = ti.field( dtype=ti.f32, shape=(1))
+cg_delta_old     = ti.field( dtype=ti.f32, shape=(1))
+cg_delta_zero     = ti.field( dtype=ti.f32, shape=(1))
 
-#eye        = ti.Vector([0.5, 1.0, 2.0])
-#target     = ti.Vector([0.0, 0.0, -1.0])
+cg_Minv = ti.Matrix.field(3, 3, dtype=ti.f32, shape=(particleLiquidNum))
+cg_r = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+cg_dir   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+cg_Ad   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+cg_s   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 
+min_boundary   = ti.Vector(3, dt=ti.f32, shape=(1))
+max_boundary   = ti.Vector(3, dt=ti.f32, shape=(1))
+blockSize  = ti.Vector(3, dt=ti.i32, shape=(1))
 eye        = ti.Vector(3, dt=ti.f32, shape=(1))
 target     = ti.Vector(3, dt=ti.f32, shape=(1))
 
@@ -61,21 +67,56 @@ pressure_pre    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 d_rho       = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
-vel_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-
-
-
 
 neighborCount = ti.field(dtype=ti.i32, shape=(particleLiquidNum))
 neighbor      = ti.field(dtype=ti.i32, shape=(particleLiquidNum, maxNeighbour))
 
-gridCount     = ti.field(dtype=ti.i32, shape=(gridSize))
-grid          = ti.field(dtype=ti.i32, shape=(gridSize, maxNeighbour))
 
+global hash_grid
+@ti.data_oriented
+class HashMap:
+    def __init__(self, n):
+        self.count        = n
 
+        self.gridCount = ti.field(dtype=ti.i32)
+        self.grid       = ti.field(dtype=ti.i32)
+        
+        ti.root.dense(ti.i, self.count).place(self.gridCount)
+        ti.root.dense(ti.ij, (self.count, maxNeighbour)).place(self.grid)
+    
+    @ti.kernel
+    def update_grid(self):
+        for i,j in self.grid:
+            self.grid[i,j] = -1
+            self.gridCount[i]=0
+
+        for i in pos:
+            indexV         = clampV( ti.cast((pos[i] - min_boundary[0])*invGridR, ti.i32), ti.Vector([0,0,0]), blockSize[0]-1)
+            hash_index     = self.get_cell_hash(indexV)
+
+            old = ti.atomic_add(self.gridCount[hash_index] , 1)
+            if old > maxNeighbour-1:
+                print("exceed grid", old)
+                self.gridCount[hash_index] = maxNeighbour
+            else:
+                self.grid[hash_index, old] = i
+        
+
+    @ti.func
+    def get_cell_hash(self, a):
+        p1 = 73856093 * a.x
+        p2 = 19349663 * a.y
+        p3 = 83492791 * a.z
+
+        return ((p1^p2^p3) % self.count  +  self.count ) % self.count  
 
 
 def load_boundry(filename):
+    global hash_grid
+    global particleLiquidNum
+    global particleNum
+    global particleSolidNum
+
     vertices = []
     for line in open(filename, "r"):
         if line.startswith('#'): continue
@@ -85,18 +126,14 @@ def load_boundry(filename):
             v = list(map(float, values[1:4]))
             vertices.append(v)
 
-    global particleLiquidNum
-    global particleNum
-    global particleSolidNum
     particleSolidNum = len(vertices)
     particleNum = particleSolidNum + particleLiquidNum
 
-    ti.root.dense(ti.i, particleNum ).place(mass)
-    ti.root.dense(ti.i, particleNum ).place(pos)
-    ti.root.dense(ti.i, particleNum ).place(inedxInGrid)
-
-
-        
+    maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+    minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+    for i in range(3):
+        maxboundarynp[0, i] = -10000.0
+        minboundarynp[0, i] = 10000.0
 
     arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
     for i in range(particleNum):
@@ -106,17 +143,57 @@ def load_boundry(filename):
             x = float(i//aa - particleDimX / 2)
             y = float((i%aa)//particleDimZ)
             z = float(i%particleDimZ - particleDimZ/2)
-            arrV[i, 0]  = x * particleRadius*2.0 
+            arrV[i, 0]  = x * particleRadius*2.0
             arrV[i, 1]  = y * particleRadius*2.0 + 0.7
-            arrV[i, 2]  = z * particleRadius*2.0 
+            arrV[i, 2]  = z * particleRadius*2.0
         else:
             arrV[i, 0] = vertices[i-particleLiquidNum][0]
             arrV[i, 1] = vertices[i-particleLiquidNum][1]
             arrV[i, 2] = vertices[i-particleLiquidNum][2]
 
+        for j in range(3):
+            maxboundarynp[0, j] = max(maxboundarynp[0, j], arrV[i,j])
+            minboundarynp[0, j] = min(minboundarynp[0, j], arrV[i,j])
+    
+
+    blocknp   = np.ones(shape=(1,3), dtype=np.int32)
+    for i in range(3):
+        blocknp[0, i]    = int((maxboundarynp[0, i] - minboundarynp[0, i]) * invGridR)
+
+    gridSize     = int(blocknp[0, 0]*blocknp[0, 1]*blocknp[0, 2])
+
+    ti.root.dense(ti.i, particleNum ).place(pos)
+    ti.root.dense(ti.i, particleNum ).place(inedxInGrid)
+    hash_grid = HashMap(particleNum)
+
+    max_boundary.from_numpy(maxboundarynp)
+    min_boundary.from_numpy(minboundarynp)
+    blockSize.from_numpy(blocknp)
     pos.from_numpy(arrV)
 
     print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
+
+def compute_nonpressure_force():
+    global average_iter
+    global frame
+
+    init_viscosity_para()
+    iter = 0
+    while iter < 100:
+        compute_viscosity_force()
+        iter+=1
+        #if iter > average_iter:
+        #    print("iter:", iter, "error:", cg_delta[0], "of", cg_delta_zero[0])
+
+        if cg_delta[0] <= 0.01 * cg_delta_zero[0]:
+            break
+    combine_nonpressure()
+
+    average_iter += iter
+    print("iter:", iter, "average", average_iter / (frame+1) ) 
+
+
+
 
 @ti.func
 def clamp(v, low_limit, up_limit):
@@ -131,9 +208,9 @@ def clamp(v, low_limit, up_limit):
 @ti.func
 def clampV(v, low_limit, up_limit):
     res = v
-    res.x = clamp(res.x, low_limit, up_limit)
-    res.y = clamp(res.y, low_limit, up_limit)
-    res.z = clamp(res.z, low_limit, up_limit)
+    res.x = clamp(res.x, low_limit.x, up_limit.x)
+    res.y = clamp(res.y, low_limit.y, up_limit.y)
+    res.z = clamp(res.z, low_limit.z, up_limit.z)
     
     return res
     
@@ -250,11 +327,8 @@ def draw_solid_sphere(v, c):
 def draw_point(v, c):
     v = transform(v)
     Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
-    fill_pixel(Centre, 0.0, c)
+    fill_pixel(Centre, v.z, c)
                 
-
-
-
 @ti.func
 def gradW(r):
     res = ti.Vector([0.0, 0.0, 0.0])
@@ -293,7 +367,6 @@ def W(v):
 def reset_particle():
 
     for i in vel:
-        mass[i]     = 1.0
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
 
@@ -307,98 +380,119 @@ def clear_canvas():
         depth[i, j] = 1.0
         
 
-@ti.kernel
-def clear_grid():
-    for i,j in grid:
-        grid[i,j] = -1
-        gridCount[i]=0
-
-
-@ti.kernel
-def update_grid():
-    for i in pos:
-        indexV         = clampV( ti.cast((pos[i]+boundary/2.0)*invGridR, ti.i32), 0, blockSize-1)
-        index          = indexV.x*doublesize + indexV.y * blockSize + indexV.z
-        inedxInGrid[i] = index
-
-        old = ti.atomic_add(gridCount[index] , 1)
-        if old > maxNeighbour-1:
-            #print("exceed grid", old)
-            gridCount[index] = maxNeighbour
-        else:
-            grid[index, old] = i
-
-
-@ti.kernel
-def reset_neighbor():
-    for i,j in neighbor:
-        neighbor[i,j]    = -1
-        neighborCount[i] = 0
-
 @ti.func
-def insert_neighbor(i, colj):
-    if colj >= 0:
-        k=0
-        while k < gridCount[colj]:
-            j = grid[colj, k]
-            if j >= 0 and (i != j):
-                #print( "posi:", pos[i],  "posj:", pos[j])
+def insert_neighbor(i, index_neigh):
+    if index_neigh.x >= 0 and index_neigh.x <= blockSize[0].x and \
+    index_neigh.y >= 0 and index_neigh.y <= blockSize[1].y  and \
+    index_neigh.z >= 0 and index_neigh.z <= blockSize[2].z :
 
+        hash_index = hash_grid.get_cell_hash(index_neigh)
+        k=0
+        while k < hash_grid.gridCount[hash_index]:
+            j = hash_grid.grid[hash_index, k]
+            if j >= 0 and (i != j):
                 r = pos[i] - pos[j]
                 r_mod = r.norm()
                 if r_mod < searchR:
                     old = ti.atomic_add(neighborCount[i] , 1)
                     if old > maxNeighbour-1:
                         old = old
-                        #print("exceed neighbor", old)
+                        print("exceed neighbor", old)
                     else:
                         neighbor[i, old] = j
             k += 1
 
 @ti.kernel
 def find_neighbour():
+    for i,j in neighbor:
+        neighbor[i,j]    = -1
+        neighborCount[i] = 0
+
     for i in neighborCount:
-        index = inedxInGrid[i]
-
-        insert_neighbor(i, index)
-        insert_neighbor(i, index-1)
-        insert_neighbor(i, index+1) 
-        insert_neighbor(i, index+doublesize)
-        insert_neighbor(i, index-doublesize)
-        insert_neighbor(i, index+blockSize)
-        insert_neighbor(i, index-blockSize)     
-
-        insert_neighbor(i, index+doublesize+blockSize)
-        insert_neighbor(i, index+doublesize-blockSize)
-        insert_neighbor(i, index-doublesize+blockSize)
-        insert_neighbor(i, index-doublesize-blockSize)  
-
-        insert_neighbor(i, index+doublesize+1)
-        insert_neighbor(i, index-doublesize+1)
-        insert_neighbor(i, index+blockSize+1)
-        insert_neighbor(i, index-blockSize+1)       
-        insert_neighbor(i, index+doublesize-1)
-        insert_neighbor(i, index-doublesize-1)
-        insert_neighbor(i, index+blockSize-1)
-        insert_neighbor(i, index-blockSize-1)     
-
-        insert_neighbor(i, index+doublesize+blockSize+1)
-        insert_neighbor(i, index+doublesize-blockSize+1)
-        insert_neighbor(i, index-doublesize+blockSize+1)
-        insert_neighbor(i, index-doublesize-blockSize+1)
-        insert_neighbor(i, index+doublesize+blockSize-1)
-        insert_neighbor(i, index+doublesize-blockSize-1)
-        insert_neighbor(i, index-doublesize+blockSize-1)
-        insert_neighbor(i, index-doublesize-blockSize-1)
+        indexV         = clampV( ti.cast((pos[i] - min_boundary[0])*invGridR, ti.i32), ti.Vector([0,0,0]), blockSize[0]-1)
+        for m in range(-1,2):
+            for n in range(-1,2):
+                for q in range(-1,2):
+                    insert_neighbor(i, ti.Vector([m, n, q]) + indexV)
 
 
 
+
+
+
+@ti.func
+def get_viscosity_Ax(x: ti.template(), i):
+    ret = ti.Vector([0.0,0.0,0.0])
+    cur_neighbor     = neighborCount[i]
+    k=0
+    while k < cur_neighbor:
+        j = neighbor[i, k]
+        r = pos[i] - pos[j]     
+        
+        if j < particleLiquidNum:
+            ret += dim_coff*viscosity    / rho[j]  * (x[i] - x[j]).dot(r)  / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r) / rho[i] * deltaT
+        else:
+            ret += dim_coff*viscosity_b  * rho_S0 / rho[i] * VS0  * x[i].dot(r)  / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r) / rho[i] * deltaT    
+        k+=1
+    return x[i] - ret
 
 @ti.kernel
-def compute_nonpressure_force():
-    for i in d_vel:
+def init_viscosity_para():
+    for i in vel_guess:
+        vel_guess[i] = vel[i]
 
-        d_vel[i] = gravity
+    for i in cg_Minv:
+        m = ti.Matrix([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        cur_neighbor     = neighborCount[i]
+        k=0
+        while k < cur_neighbor:
+            j = neighbor[i, k]
+            r = pos[i] - pos[j]     
+            grad_xij = gradW(r).outer_product(r)
+            if j < particleLiquidNum:
+                m += dim_coff * viscosity    / rho[j]  / (r.norm_sqr() + 0.01*searchR*searchR) * grad_xij 
+            else:
+                m += dim_coff * viscosity_b  * rho_S0 / rho[i] * VS0  / (r.norm_sqr() + 0.01*searchR*searchR) * grad_xij   
+            k+=1
+        cg_Minv[i] = (ti.Matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]) - m  * (deltaT/rho[i]) ).inverse()
+        #cg_Minv[i] = ti.Matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+
+
+
+    cg_delta_zero[0] = 0.0
+    for i in cg_r:
+        cg_r[i]   = vel[i] - get_viscosity_Ax(vel_guess, i)
+        cg_dir[i] = cg_Minv[i] @ cg_r[i]
+
+        cg_delta_zero[0] += cg_r[i].dot(cg_dir[i])
+    cg_delta[0] = cg_delta_zero[0]
+
+@ti.kernel
+def compute_viscosity_force():
+    cg_dAd  = eps
+    for i in cg_r:
+        cg_Ad[i] = get_viscosity_Ax(cg_dir, i)
+        cg_dAd += cg_dir[i].dot(cg_Ad[i]) 
+    
+    
+    alpha = cg_delta[0] / cg_dAd
+    cg_delta_old[0] = cg_delta[0]
+    cg_delta[0] = 0.0
+    for i in cg_r:
+        vel_guess[i] += alpha * cg_dir[i]
+        cg_r[i] = cg_r[i] - alpha * cg_Ad[i]
+        cg_s[i] = cg_Minv[i] @ cg_r[i]
+        cg_delta[0] += cg_r[i].dot(cg_s[i])
+
+        
+    beta = cg_delta[0] / cg_delta_old[0]
+
+    for i in cg_r:
+        cg_dir[i] = cg_s[i] + beta * cg_dir[i]
+
+@ti.kernel
+def compute_density():
+    for i in rho:
         rho[i]  = VL0 * W_norm(0.0) * rho_L0 
 
         cur_neighbor     = neighborCount[i]
@@ -406,15 +500,17 @@ def compute_nonpressure_force():
         while k < cur_neighbor:
             j = neighbor[i, k]
             r = pos[i] - pos[j]
-
             if j < particleLiquidNum:
                 rho[i]     += VL0 * W(r) * rho_L0 
-                d_vel[i]   += visorcity / rho_L0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
             else:
                 rho[i]     += VS0 * W(r) * rho_S0
-                d_vel[i]   += visorcity_b / rho_S0 * vel[i] .dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
-            
             k += 1
+
+@ti.kernel
+def combine_nonpressure():
+    for i in d_vel:
+        d_vel[i]  = gravity + (vel_guess[i] - vel[i]) / deltaT
+
 
 @ti.kernel
 def compute_init_coff():
@@ -550,16 +646,13 @@ def draw_particle():
     
     for i in pos:
         if i < particleLiquidNum:
-            draw_point(pos[i], ti.Vector([1.0,1.0,1.0]))
+            draw_solid_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
 
     for i in pos:
         if i> particleLiquidNum and pos[i].z < 0.3 and pos[i].z > -0.3 and pos[i].x < 1.12 and pos[i].x > -1.0 and pos[i].y > 0.01:
-            draw_point(pos[i], ti.Vector([1.0,0.0,0.0]))
-            j = i
-        elif i> particleLiquidNum:
+            draw_sphere(pos[i], ti.Vector([1.0,0.0,0.0]))
+        elif i> particleLiquidNum and pos[i].z < 0.49:
             draw_point(pos[i], ti.Vector([0.3,0.3,0.3]))
-
-
 
 up         = ti.Vector([0.0, 1.0, 0.0])
 gravity    = ti.Vector([0.0, -9.81, 0.0])
@@ -570,22 +663,21 @@ near       = 1.0
 far        = 1000.0
 
 omega = 0.5
-visorcity = 0.2
-visorcity_b = 0.01
+dim_coff  = 10.0
+viscosity = 100.0
+viscosity_b = 100.0
 
 rho_L0 = 1000.0
 rho_S0 = rho_L0
 VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
 VS0    = VL0 
-#VS0    = -0.05
 
 pi    = 3.1415926
 h3    = searchR*searchR*searchR
 m_k   = 8.0  / (pi*h3)
 m_l   = 48.0 / (pi*h3)
-frame = 0
-iterNum = 0.01 /  deltaT
-totalFrame = 100
+iterNum = 0.02 /  deltaT
+totalFrame = 50
 
 load_boundry("boundry.obj")
 reset_particle()
@@ -595,7 +687,7 @@ while gui.running:
 
     eye_np = eye.to_numpy()
     target_np = target.to_numpy()
-    eye_np[0][0] = 0.5 - float(frame)*0.001
+    eye_np[0][0] = 0.5
     eye_np[0][1] = 1.0
     eye_np[0][2] = 2.0 
     target_np[0][0] = 0.0 
@@ -605,12 +697,10 @@ while gui.running:
     target.from_numpy(target_np)
 
 
-    clear_grid()
-    update_grid()
-    reset_neighbor()
+    hash_grid.update_grid()
     find_neighbour()
 
-    
+    compute_density()
     compute_nonpressure_force()
     compute_init_coff()
     
