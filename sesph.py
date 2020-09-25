@@ -4,21 +4,20 @@ import taichi as ti
 import time
 import math
 import numpy as np
+from Canvas import Canvas
+from HashGrid import HashGrid
 
 
-#ti.init(arch=ti.gpu,advanced_optimization=False)
-ti.init(arch=ti.gpu,advanced_optimization=True)
+#gui param
 imgSize = 512
-screenRes = ti.Vector([imgSize, imgSize])
-img = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
-depth = ti.field(dtype=ti.f32, shape=[imgSize,imgSize])
-gui = ti.GUI('wcsph', res=(imgSize,imgSize))
+current_time = 0.0
+total_time   = 5.0
+eps = 1e-5
+test_id = 1000
+deltaT    = ti.field( dtype=ti.f32, shape=(1))
 
 
-
-test_id = 0
-maxNeighbour = 32
-
+#particle param
 particleRadius = 0.025
 gridR       = particleRadius * 2.0
 searchR     = gridR*2.0
@@ -35,175 +34,78 @@ particleLiquidNum  = particleDimX*particleDimY*particleDimZ
 particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*(blockSize-2)*2 
 particleNum        = particleLiquidNum + particleSolidNum
 
+rho_0 = 1000.0
+VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
+VS0    = VL0 * 2.0
+liqiudMass = VL0 * rho_0
 
+#kernel param
+searchR     = gridR*2.0
+pi    = 3.1415926
+h3    = searchR*searchR*searchR
+m_k   = 8.0  / (pi*h3)
+m_l   = 48.0 / (pi*h3)
 
-
-
-rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
-pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
-
+#advetion param
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+gravity    = ti.Vector([0.0, -9.81, 0.0])
+global hash_grid
 
-neighborCount = ti.field(dtype=ti.i32, shape=(particleLiquidNum))
-neighbor      = ti.field(dtype=ti.i32, shape=(particleLiquidNum, maxNeighbour))
+#pressure param
+rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+stiffness   = 50000.0
 
-pos         = ti.Vector(3, dt=ti.f32, shape=(particleNum))
-inedxInGrid = ti.field( dtype=ti.i32, shape=(particleNum))
-gridCount     = ti.field(dtype=ti.i32, shape=(gridSize))
-grid          = ti.field(dtype=ti.i32, shape=(gridSize, maxNeighbour))
-
-
-
-print("gridsize:", gridSize, "gridR:", gridR, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
-
-
-
-@ti.func
-def clamp(v, low_limit, up_limit):
-    res = v
-    if res < low_limit:
-        res = low_limit
-        
-    if res > up_limit:
-        res = up_limit
-    return res
-    
-@ti.func
-def clampV(v, low_limit, up_limit):
-    res = v
-    res.x = clamp(res.x, low_limit, up_limit)
-    res.y = clamp(res.y, low_limit, up_limit)
-    res.z = clamp(res.z, low_limit, up_limit)
-    
-    return res
-    
-@ti.func
-def get_proj(fovY, ratio, zn, zf):
-    #  d3d perspective https://docs.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixperspectiverh 
-    # rember it is col major
-    # xScale     0          0              0
-    # 0        yScale       0              0
-    # 0        0        zf/(zn-zf)        -1
-    # 0        0        zn*zf/(zn-zf)      0
-    # where:
-    # yScale = cot(fovY/2)  
-    # xScale = yScale / aspect ratio
-    
-    #yScale = 1.0    / ti.tan(fovY/2)
-    #xScale = yScale / ratio
-    #return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, zf/(zn-zf), zn*zf/(zn-zf)], [0.0, 0.0, -1.0, 0.0] ])
-    
-    #d3d ortho https://docs.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixorthorh
-    yScale = 1.0    / ti.tan(fovY/2)
-    xScale = yScale / ratio
-    return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(zn-zf), zn/(zn-zf)], [0.0, 0.0, 0.0, 1.0] ])
-    
-    
-@ti.func
-def get_view(eye, target, up):
-    #  d3d lookat https://docs.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixlookatrh
-    # rember it is col major
-    #zaxis = normal(Eye - At)
-    #xaxis = normal(cross(Up, zaxis))
-    #yaxis = cross(zaxis, xaxis)
-     
-    # xaxis.x           yaxis.x           zaxis.x          0
-    # xaxis.y           yaxis.y           zaxis.y          0
-    # xaxis.z           yaxis.z           zaxis.z          0
-    # dot(xaxis, eye)   dot(yaxis, eye)   dot(zaxis, eye)  1    ←  there is something wrong with it，  it should be '-'
-    
-    zaxis = eye - target
-    zaxis = zaxis.normalized()
-    xaxis = up.cross( zaxis)
-    xaxis = xaxis.normalized()
-    yaxis = zaxis.cross( xaxis)
-    return ti.Matrix([ [xaxis.x, xaxis.y, xaxis.z, -xaxis.dot(eye)], [yaxis.x, yaxis.y, yaxis.z, -yaxis.dot(eye)], [zaxis.x, zaxis.y, zaxis.z, -zaxis.dot(eye)], [0.0, 0.0, 0.0, 1.0] ])
-
-@ti.func
-def transform(v):
-    proj = get_proj(fov, 1.0, near, far)
-    view = get_view(eye, target, up )
-    
-    screenP  = proj @ view @ ti.Vector([v.x, v.y, v.z, 1.0])
-    screenP /= screenP.w
-    
-    return ti.Vector([(screenP.x+1.0)*0.5*screenRes.x, (screenP.y+1.0)*0.5*screenRes.y, screenP.z])
-
-@ti.func
-def fill_pixel(v, z, c):
-    if (v.x >= 0) and  (v.x <screenRes.x) and (v.y >=0 ) and  (v.y < screenRes.y):
-        if depth[v] > z:
-            img[v] = max(img[v], c)
-            depth[v] = z
+#viscorcity 
+dim_coff  = 10.0
+viscosity     = 0.1
+viscosity_b   = 0.0
 
 
-@ti.func
-def draw_sphere(v, c):
 
-    v  = transform(v)
-    xc = ti.cast(v.x, ti.i32)
-    yc = ti.cast(v.y, ti.i32)
-
-    r=3
-    x=0
-    y = r
-    d = 3 - 2 * r
-
-    while x<=y:
-        fill_pixel(ti.Vector([ xc + x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc - x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc - x]), v.z, c)
+def init_particle():
+    global hash_grid
+    global particleLiquidNum
+    global particleNum
+    global particleSolidNum
 
 
-        if d<0:
-            d = d + 4 * x + 6
-        else:
-            d = d + 4 * (x - y) + 10
-            y = y-1
-        x +=1
-
-@ti.func
-def draw_large_sphere(v, c):
-
-    v  = transform(v)
-    xc = ti.cast(v.x, ti.i32)
-    yc = ti.cast(v.y, ti.i32)
-
-    r=4
-    x=0
-    y = r
-    d = 3 - 2 * r
-
-    while x<=y:
-        fill_pixel(ti.Vector([ xc + x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc - x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc - x]), v.z, c)
+    maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+    minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+    for j in range(3):
+        maxboundarynp[0, j] = boundary*0.5-gridR*0.5
+        minboundarynp[0, j] = -boundary*0.5+gridR*0.5
 
 
-        if d<0:
-            d = d + 4 * x + 6
-        else:
-            d = d + 4 * (x - y) + 10
-            y = y-1
-        x +=1
+    arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
 
-@ti.func
-def draw_point(v, c):
-    v = transform(v)
-    Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
-    fill_pixel(Centre, 0.0, c)
-                
+
+    for i in range(particleLiquidNum):
+        aa = particleDimZ*particleDimY
+        arrV[i, 0]  = float(i//aa) * particleRadius*2.0
+        arrV[i, 1]  = float(i%aa//particleDimZ) * particleRadius*2.0 - 0.9
+        arrV[i, 2]  = float(i%particleDimZ) * particleRadius*2.0
+
+    #y = Ax + B  
+    A = boundary  / ( float(blockSize)-1.0 )
+    B = -0.5 * boundary
+    shrink = 1.0
+    index = 0
+    for i in range(gridSize):
+        indexX      = i//doublesize
+        indexY      = (i%doublesize)//blockSize
+        indexZ      = i%blockSize
+        if indexX== 0 or indexY ==0 or indexZ == 0 or\
+        indexX == blockSize-1 or indexY ==blockSize-1 or indexZ == blockSize-1 :
+            arrV[index+particleLiquidNum, 0] = (A * float(indexX)  + B) * shrink
+            arrV[index+particleLiquidNum, 1] = (A * float(indexY)  + B) * shrink
+            arrV[index+particleLiquidNum, 2] = (A * float(indexZ)  + B) * shrink
+            index += 1
+
+    hash_grid = HashGrid(particleNum, particleLiquidNum, maxboundarynp, minboundarynp, gridR)
+    hash_grid.pos.from_numpy(arrV)
+    print("grid szie:", hash_grid.gridSize, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
 
 
 
@@ -243,153 +145,22 @@ def W(v):
 
 @ti.kernel
 def reset_particle():
-
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
-
-        aa = particleDimZ*particleDimY
-        x = i//aa
-        y = (i%aa)//particleDimZ
-        z = i%particleDimZ
-        pos[i]      = ti.cast(ti.Vector([x, y, z]),ti.f32) * particleRadius*2.0 + ti.Vector([0.0, -0.9, 0.0])
-
-
-
-    for i in gridCount:
-        gridCount[i]=0
-
-        index      = ti.Vector([i//doublesize, (i%doublesize)//blockSize, i%blockSize])
-        xyz        = (float(index) * gridR - boundary/2.0  + gridR * 0.5) * ( boundary / (boundary- gridR*1.5) )
-        
-        if index.x == 0:
-            solidIndex  = particleLiquidNum + index.y * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.x == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize + index.y * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.y ==0:
-            solidIndex  = particleLiquidNum + doublesize*2 + (index.x-1) * blockSize  + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.y == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize + (index.x-1) * blockSize + index.z
-            pos[solidIndex]     = xyz
-
-        elif index.z == 0:
-            solidIndex  = particleLiquidNum +  doublesize*2 + (blockSize-2)*blockSize*2 + (index.x-1) * (blockSize-2) + index.y-1
-            pos[solidIndex]     = xyz
-        elif index.z == blockSize-1:
-            solidIndex  = particleLiquidNum + doublesize*2 + (blockSize-2)*blockSize*2 + (blockSize-2) * (blockSize-2) + (index.x-1) * (blockSize-2) + index.y-1
-            pos[solidIndex]     = xyz
-
-        
-        
-@ti.kernel
-def clear_canvas():
-    for i, j in img:
-        img[i, j]=ti.Vector([0, 0, 0])
-        depth[i, j] = 1.0
-        
-
-@ti.kernel
-def clear_grid():
-    for i,j in grid:
-        grid[i,j] = -1
-        gridCount[i]=0
+        deltaT[0] = 0.001
 
 
 @ti.kernel
-def update_grid():
-    for i in pos:
-        indexV         = clampV( ti.cast((pos[i]+boundary/2.0)*invGridR, ti.i32), 0, blockSize-1)
-        index          = indexV.x*doublesize + indexV.y * blockSize + indexV.z
-        inedxInGrid[i] = index
-
-        old = ti.atomic_add(gridCount[index] , 1)
-        if old > maxNeighbour-1:
-            #print("exceed grid", old)
-            gridCount[index] = maxNeighbour
-        else:
-            grid[index, old] = i
-
-
-@ti.kernel
-def reset_neighbor():
-    for i,j in neighbor:
-        neighbor[i,j]    = -1
-        neighborCount[i] = 0
-
-@ti.func
-def insert_neighbor(i, colj):
-    if colj >= 0:
-        k=0
-        while k < gridCount[colj]:
-            j = grid[colj, k]
-            if j >= 0 and (i != j):
-                #print( "posi:", pos[i],  "posj:", pos[j])
-
-                r = pos[i] - pos[j]
-                r_mod = r.norm()
-                if r_mod < searchR:
-                    old = ti.atomic_add(neighborCount[i] , 1)
-                    if old > maxNeighbour-1:
-                        old = old
-                        #print("exceed neighbor", old)
-                    else:
-                        neighbor[i, old] = j
-            k += 1
-
-@ti.kernel
-def find_neighbour():
-    for i in neighborCount:
-        index = inedxInGrid[i]
-
-        insert_neighbor(i, index)
-        insert_neighbor(i, index-1)
-        insert_neighbor(i, index+1) 
-        insert_neighbor(i, index+doublesize)
-        insert_neighbor(i, index-doublesize)
-        insert_neighbor(i, index+blockSize)
-        insert_neighbor(i, index-blockSize)     
-
-        insert_neighbor(i, index+doublesize+blockSize)
-        insert_neighbor(i, index+doublesize-blockSize)
-        insert_neighbor(i, index-doublesize+blockSize)
-        insert_neighbor(i, index-doublesize-blockSize)  
-
-        insert_neighbor(i, index+doublesize+1)
-        insert_neighbor(i, index-doublesize+1)
-        insert_neighbor(i, index+blockSize+1)
-        insert_neighbor(i, index-blockSize+1)       
-        insert_neighbor(i, index+doublesize-1)
-        insert_neighbor(i, index-doublesize-1)
-        insert_neighbor(i, index+blockSize-1)
-        insert_neighbor(i, index-blockSize-1)     
-
-        insert_neighbor(i, index+doublesize+blockSize+1)
-        insert_neighbor(i, index+doublesize-blockSize+1)
-        insert_neighbor(i, index-doublesize+blockSize+1)
-        insert_neighbor(i, index-doublesize-blockSize+1)
-        insert_neighbor(i, index+doublesize+blockSize-1)
-        insert_neighbor(i, index+doublesize-blockSize-1)
-        insert_neighbor(i, index-doublesize+blockSize-1)
-        insert_neighbor(i, index-doublesize-blockSize-1)
-
-
-
-@ti.kernel
-def update_delta_density():
+def update_advection_density():
     for i in rho:
         rho[i]           = VL0 *W_norm(0.0)
-        cur_neighbor = neighborCount[i]
+        cur_neighbor = hash_grid.neighborCount[i]
         k=0
 
         while k < cur_neighbor:
-            j = neighbor[i, k]
-            r = pos[i] - pos[j]
+            j = hash_grid.neighbor[i, k]
+            r = hash_grid.pos[i] - hash_grid.pos[j]
             d_den = W(r)
             if j < particleLiquidNum:
                 rho[i] += VL0 * d_den  
@@ -414,20 +185,20 @@ def update_pressure():
 def compute_force():
     for i in d_vel:
         d_vel[i]         = gravity
-        cur_neighbor = neighborCount[i]
+        cur_neighbor = hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
-            j = neighbor[i, k]
-            pi = pos[i]
-            pj = pos[j]
+            j = hash_grid.neighbor[i, k]
+            pi = hash_grid.pos[i]
+            pj = hash_grid.pos[j]
             r = pi - pj
             grad  = gradW(r)
 
             if j < particleLiquidNum:
-                d_vel[i] +=  visorcity / rho_0 * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR)*grad 
+                d_vel[i] +=  dim_coff * viscosity * liqiudMass / rho[j] * (vel[i] - vel[j]).dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
                 d_vel[i] +=  -rho_0 * VL0 * (pressure[i] / (rho[i]*rho[i]) + pressure[j] / (rho[j]*rho[j])) * grad
             else:
-                d_vel[i] += visorcity /  rho_0 * vel[i].dot(r) / (r.norm_sqr() + 0.01*searchR*searchR)*grad 
+                d_vel[i] += dim_coff * viscosity_b * VS0 * (rho[i] / rho_0) * vel[i].dot(r) / (r.norm_sqr() + 0.01*searchR*searchR) * gradW(r)
                 d_vel[i] +=  -rho_0 * VS0 * (pressure[i] / (rho[i]*rho[i])+ pressure[i] / (rho_0*rho_0))  * grad
 
             k += 1
@@ -435,100 +206,54 @@ def compute_force():
     
 @ti.kernel
 def integrator_sesph():
-    for i in pos:
+    for i in hash_grid.pos:
         if i < particleLiquidNum:
-            vel[i]  += d_vel[i]  * deltaT
-            pos[i]  += vel[i]  * deltaT
+            vel[i]  += d_vel[i]  * deltaT[0]
+            hash_grid.pos[i]  += vel[i]  * deltaT[0]
 
     
             
 @ti.kernel
 def draw_particle():
-    for i in pos:
+    for i in hash_grid.pos:
         if i < particleLiquidNum:
-            draw_sphere(pos[i], ti.Vector([1.0,1.0,1.0]))
-        elif i < particleLiquidNum + doublesize *2 + blockSize*(blockSize-2)*2:
-            draw_sphere(pos[i], ti.Vector([0.3,0.3,0.3]))
+            #draw_solid_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
+            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
+        elif hash_grid.pos[i][2] < boundary*0.1 and hash_grid.pos[i][2] > -boundary*0.1 :
+            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
 
-@ti.kernel
-def draw_grid():
-    
-    for i in gridCount:
-        count = 0
-        k = 0
-        while k < gridCount[i]:
-            if grid[i, k] < particleLiquidNum:
-                count += 1
-            k +=1
 
-        index = ti.Vector([i//doublesize, (i%doublesize)//blockSize, i%blockSize])
-        xyz   = float(index) * gridR - boundary/2.0 +gridR*0.5
-
-        if count > 4:
-            draw_large_sphere(xyz, ti.Vector([1.0,0.0,0.0]))
-        elif count > 2:
-            draw_large_sphere(xyz, ti.Vector([0.0,1.0,0.0]))
-        elif count > 0:
-            draw_large_sphere(xyz, ti.Vector([0.0,0.0,1.0]))
-        else:
-            draw_large_sphere(xyz, ti.Vector([0.3,0.3,0.3]))
             
 
-
-
-eye        = ti.Vector([0.0, 0.0, 2.0])
-target     = ti.Vector([0.0, 0.0, 0.0])
-up         = ti.Vector([0.0, 1.0, 0.0])
-gravity    = ti.Vector([0.0, -9.81, 0.0])
-collisionC = ti.Vector([0.0, 3.0, 0.0])
-
-deltaT     = 0.0001
-fov        = 2.0
-near       = 1.0
-far        = 1000.0
-
-stiffness = 50000.0
-rho_0     = 1000.0
-visorcity = 0.01
-VL0       = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
-VS0       = VL0 * 2.0
-
-pi = 3.1415926
-h3 = searchR*searchR*searchR
-m_k = 8.0  / (pi*h3)
-m_l = 48.0 / (pi*h3)
-
-iterNum = 0.03 /  deltaT
-frame = 0
-totalFrame = 120
-
+gui = ti.GUI('sesph', res=(imgSize, imgSize))
+sph_canvas = Canvas(imgSize, imgSize)
+init_particle()
 reset_particle()
-clear_canvas()
+
+sph_canvas.set_fov(2.0)
+sph_canvas.set_target(0.0, 0.0, 0.0)
+sph_canvas.ortho = 1
+
 while gui.running:
     
-    clear_grid()
-    update_grid()
-    reset_neighbor()
-    find_neighbour()
+    sph_canvas.set_view_point(0.0, 0.0, 0.0, 3.0)
+    hash_grid.update_grid()
 
-    update_delta_density()
+    update_advection_density()
     update_pressure()
     compute_force()
     integrator_sesph()
 
-    if frame % iterNum == 0:
-        clear_canvas()
-        #draw_grid()
-        draw_particle()
-        #ti.imwrite(img, str(frame//iterNum)+ ".png")
+    
+    sph_canvas.clear_canvas()
+    draw_particle()
         
-    gui.set_image(img.to_numpy())
+    gui.set_image(sph_canvas.img.to_numpy())
     gui.show()
-    frame += 1
 
-    if math.isnan(pos.to_numpy()[test_id, 0]) or frame >= totalFrame * iterNum:
-        print(rho.to_numpy()[test_id], pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
-        sys.exit()
+    dt = deltaT.to_numpy()[0]
+    current_time += dt
+    print("time:%.3f"%current_time, "step:%.4f"%dt)
 
 
 

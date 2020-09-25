@@ -4,14 +4,16 @@ import taichi as ti
 import time
 import math
 import numpy as np
-
+from Canvas import Canvas
 
 ti.init(arch=ti.gpu,advanced_optimization=True)
+
 imgSize = 512
 screenRes = ti.Vector([imgSize, imgSize])
 img       = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
 depth     = ti.field(dtype=ti.f32, shape=[imgSize,imgSize])
 gui       = ti.GUI('boundry', res=(imgSize,imgSize))
+sph_canvas = Canvas(imgSize, imgSize)
 
 
 
@@ -200,7 +202,6 @@ def loadObj(filename):
     tri_normal.from_numpy(arrN)
     tri_area.from_numpy(arrArea)
 
-
 def write_info(filemode):
     fo = open("test.txt", filemode)
     cell = init_cell.to_numpy()
@@ -222,94 +223,7 @@ def gpu_bitonic_sort():
             j = j//2
         i = i << 1
     #write_info("w")
-
-    
-
-    
-    
-
-
-@ti.func
-def get_proj(fovY, ratio, zn, zf):
-    #yScale = 1.0    / ti.tan(fovY/2)
-    #xScale = yScale / ratio
-    #return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, zf/(zn-zf), zn*zf/(zn-zf)], [0.0, 0.0, -1.0, 0.0] ])
-    
-    yScale = 1.0    / ti.tan(fovY/2)
-    xScale = yScale / ratio
-    return ti.Matrix([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(zn-zf), zn/(zn-zf)], [0.0, 0.0, 0.0, 1.0] ])
-    
-    
-@ti.func
-def get_view(eye, target, up):
-    zaxis = eye - target
-    zaxis = zaxis.normalized()
-    xaxis = up.cross( zaxis)
-    xaxis = xaxis.normalized()
-    yaxis = zaxis.cross( xaxis)
-    return ti.Matrix([ [xaxis.x, xaxis.y, xaxis.z, -xaxis.dot(eye)], [yaxis.x, yaxis.y, yaxis.z, -yaxis.dot(eye)], [zaxis.x, zaxis.y, zaxis.z, -zaxis.dot(eye)], [0.0, 0.0, 0.0, 1.0] ])
-
-@ti.func
-def transform(v):
-    proj = get_proj(fov, 1.0, near, far)
-    view = get_view(eye, target, up )
-    
-    screenP  = proj @ view @ ti.Vector([v.x, v.y, v.z, 1.0])
-    screenP /= screenP.w
-    
-    return ti.Vector([(screenP.x+1.0)*0.5*screenRes.x, (screenP.y+1.0)*0.5*screenRes.y, screenP.z])
-
-@ti.func
-def fill_pixel(v, z, c):
-    if (v.x >= 0) and  (v.x <screenRes.x) and (v.y >=0 ) and  (v.y < screenRes.y):
-        if depth[v] > z:
-            img[v] =  c
-            depth[v] = z
-
-        
-@ti.func
-def draw_point(v,c):
-    v = transform(v)
-    Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
-    fill_pixel(Centre, v.z, c)
-
-@ti.func
-def draw_sphere(v, c):
-
-    v  = transform(v)
-    xc = ti.cast(v.x, ti.i32)
-    yc = ti.cast(v.y, ti.i32)
-
-    r=3
-    x=0
-    y = r
-    d = 3 - 2 * r
-
-    while x<=y:
-        fill_pixel(ti.Vector([ xc + x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc + y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc - x, yc - y]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc + x]), v.z, c)
-        fill_pixel(ti.Vector([ xc + y, yc - x]), v.z, c)
-        fill_pixel(ti.Vector([ xc - y, yc - x]), v.z, c)
-
-
-        if d<0:
-            d = d + 4 * x + 6
-        else:
-            d = d + 4 * (x - y) + 10
-            y = y-1
-        x +=1
-        
-@ti.kernel
-def clear_canvas():
-    for i, j in img:
-        img[i, j]=ti.Vector([0, 0, 0])
-        depth[i, j] = 1.0
-           
-          
+  
 @ti.kernel
 def init_point_set():
     for i in init_cell:
@@ -370,10 +284,10 @@ def draw_particle():
     
     for i in possion_sample:
         if i < possion_sample_count[0]:
-            draw_sphere(possion_sample[i], ti.Vector([1.0,1.0,1.0]))
+           sph_canvas.draw_sphere(possion_sample[i], ti.Vector([1.0,1.0,1.0]))
 
     for i in tri_vertices:
-        draw_sphere(tri_vertices[i], ti.Vector([0.5,0.3,0.3]))
+        sph_canvas.draw_sphere(tri_vertices[i], ti.Vector([0.5,0.3,0.3]))
 
 
 @ti.func
@@ -498,7 +412,7 @@ def possion_disk_sample(pg: ti.i32, trial: ti.i32):
 
                         
 
-loadObj("TAICHI.obj")
+loadObj("taichi.obj")
 init_point_set()
 gpu_bitonic_sort()
 build_hmap()
@@ -510,17 +424,24 @@ trial_times = 0
 phase_process = 0
 trial_total = 10
 
+
+
+sph_canvas.set_fov(1.0)
+sph_canvas.set_target(0.0, 1.0, 0.0)
+
 while gui.running:
+
+    sph_canvas.set_view_point(sph_canvas.yaw, sph_canvas.pitch, 0.0, 3.0)
 
     if trial_times < trial_total:
         possion_disk_sample(phase_process, trial_times)
         print("possion sample trial:", trial_times, "phase:", phase_process, "point num:", possion_sample_count[0])
-        ti.imwrite(img, str(trial_times*phase_block_size +phase_process)  + ".png")
+        #ti.imwrite(img, str(trial_times*phase_block_size +phase_process)  + ".png")
         
-    clear_canvas()
+    sph_canvas.clear_canvas()
     draw_particle()
     
-    gui.set_image(img.to_numpy())
+    gui.set_image(sph_canvas.img.to_numpy())
     gui.show()
 
     if trial_times < trial_total:
