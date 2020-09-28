@@ -20,7 +20,7 @@ class Canvas:
 
         self.ratio      = sizex / sizey
         self.yaw        = 0.0
-        self.pitch      = 0.3
+        self.pitch      = 0.0
         self.roll       = 0.0
         self.scale      = 1.0
 
@@ -30,11 +30,35 @@ class Canvas:
         
         self.ortho = 0
 
-    @ti.kernel
-    def clear_canvas(self):
-        for i, j in self.img:
-            self.img[i, j]=ti.Vector([0, 0, 0])
-            self.depth[i, j] = 1.0
+
+    @ti.pyfunc
+    def yaw_cam(self, targetx, targety, targetz):
+        self.fov = 1.0
+        self.ortho = 0
+        self.target[0] = targetx
+        self.target[1] = targety
+        self.target[2] = targetz
+        if self.yaw < 3.14:
+            self.set_view_point(self.yaw + 0.01, 0.0, 0.0, 3.0)
+
+    @ti.pyfunc
+    def pitch_cam(self, targetx, targety, targetz):
+        self.fov = 1.0
+        self.ortho = 0
+        self.target[0] = targetx
+        self.target[1] = targety
+        self.target[2] = targetz
+        if self.pitch < 0.5:
+            self.set_view_point(0.0, self.pitch + 0.003, 0.0, 3.0)
+
+    @ti.pyfunc
+    def static_cam(self, targetx, targety, targetz):
+        self.fov = 2.0
+        self.ortho = 1
+        self.target[0] = targetx
+        self.target[1] = targety
+        self.target[2] = targetz
+        self.set_view_point(0.0, 0.0, 0.0, 3.0)
 
     @ti.pyfunc
     def update_cam(self):
@@ -140,7 +164,7 @@ class Canvas:
     @ti.func
     def draw_point(self, v,c):
         v = self.transform(v)
-        Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
+        Centre = ti.Vectr([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
         self.fill_pixel(Centre, v.z, c)
 
     @ti.func
@@ -161,3 +185,9 @@ class Canvas:
         v = self.transform(v)
         Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
         self.fill_pixel(Centre, v.z, c)
+
+    @ti.kernel
+    def clear_canvas(self):
+        for i, j in self.img:
+            self.img[i, j]=ti.Vector([0, 0, 0])
+            self.depth[i, j] = 1.0

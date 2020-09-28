@@ -22,17 +22,12 @@ particleRadius = 0.025
 gridR       = particleRadius * 2.0
 searchR     = gridR*2.0
 invGridR    = 1.0 / gridR
-boundary    = 2.0
-blockSize   = int(boundary * invGridR)
-doublesize  = blockSize*blockSize
-gridSize    = blockSize*blockSize*blockSize
 
 particleDimX = 20
 particleDimY = 20
 particleDimZ = 20
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
-particleSolidNum   = doublesize * 2 + (blockSize-2)*blockSize*2 + (blockSize-2)*(blockSize-2)*2 
-particleNum        = particleLiquidNum + particleSolidNum
+boundary    = 2.0
 
 rho_0 = 1000.0
 VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
@@ -64,48 +59,32 @@ viscosity_b   = 0.0
 
 
 
-def init_particle():
+def init_particle(filename):
     global hash_grid
-    global particleLiquidNum
-    global particleNum
-    global particleSolidNum
-
-
-    maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    for j in range(3):
-        maxboundarynp[0, j] = boundary*0.5-gridR*0.5
-        minboundarynp[0, j] = -boundary*0.5+gridR*0.5
-
-
-    arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
-
-
-    for i in range(particleLiquidNum):
-        aa = particleDimZ*particleDimY
-        arrV[i, 0]  = float(i//aa) * particleRadius*2.0
-        arrV[i, 1]  = float(i%aa//particleDimZ) * particleRadius*2.0 - 0.9
-        arrV[i, 2]  = float(i%particleDimZ) * particleRadius*2.0
-
+    blockSize   = int(boundary * invGridR)
+    doublesize  = blockSize*blockSize
+    gridSize    = blockSize*blockSize*blockSize
+    hash_grid = HashGrid(gridR)
+    
     #y = Ax + B  
+    ZxY = particleDimZ*particleDimY
     A = boundary  / ( float(blockSize)-1.0 )
     B = -0.5 * boundary
     shrink = 1.0
-    index = 0
+
+    for i in range(particleLiquidNum):
+        hash_grid.add_liquid_point([float(i//ZxY)* gridR,
+                                    float((i%ZxY)//particleDimZ)* gridR -0.9 , 
+                                    float(i%particleDimZ)* gridR])
+
     for i in range(gridSize):
         indexX      = i//doublesize
         indexY      = (i%doublesize)//blockSize
         indexZ      = i%blockSize
         if indexX== 0 or indexY ==0 or indexZ == 0 or\
         indexX == blockSize-1 or indexY ==blockSize-1 or indexZ == blockSize-1 :
-            arrV[index+particleLiquidNum, 0] = (A * float(indexX)  + B) * shrink
-            arrV[index+particleLiquidNum, 1] = (A * float(indexY)  + B) * shrink
-            arrV[index+particleLiquidNum, 2] = (A * float(indexZ)  + B) * shrink
-            index += 1
-
-    hash_grid = HashGrid(particleNum, particleLiquidNum, maxboundarynp, minboundarynp, gridR)
-    hash_grid.pos.from_numpy(arrV)
-    print("grid szie:", hash_grid.gridSize, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
+            hash_grid.add_solid_point([(A * float(indexX)  + B) * shrink, (A * float(indexY)  + B) * shrink, (A * float(indexZ)  + B) * shrink])
+    hash_grid.setup_grid()
 
 
 
@@ -219,24 +198,20 @@ def draw_particle():
         if i < particleLiquidNum:
             #draw_solid_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
             sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
-        elif hash_grid.pos[i][2] < boundary*0.1 and hash_grid.pos[i][2] > -boundary*0.1 :
-            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
+        else:
+            sph_canvas.draw_point(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
             
 
 gui = ti.GUI('sesph', res=(imgSize, imgSize))
 sph_canvas = Canvas(imgSize, imgSize)
-init_particle()
+init_particle("boundry.obj")
 reset_particle()
 
-sph_canvas.set_fov(2.0)
-sph_canvas.set_target(0.0, 0.0, 0.0)
-sph_canvas.ortho = 1
-
 while gui.running:
-    
-    sph_canvas.set_view_point(0.0, 0.0, 0.0, 3.0)
+    sph_canvas.static_cam(0.0,0.0,0.0)
+
     hash_grid.update_grid()
 
     update_advection_density()

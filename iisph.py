@@ -11,12 +11,12 @@ from HashGrid import HashGrid
 ti.init(arch=ti.gpu,advanced_optimization=True)
 
 #gui param
-imgSizeX = 720
-imgSizeY = 480
+imgSizeX = 512
+imgSizeY = 512
 current_time = 0.0
 total_time   = 5.0
 eps = 1e-5
-test_id = 1000
+test_id = 0
 eps = 1e-5
 
 
@@ -25,17 +25,16 @@ particleRadius = 0.025
 gridR       = particleRadius * 2.0
 invGridR    = 1.0 / gridR
 particleDimX = 20
-particleDimY = 12
-particleDimZ = 12
+particleDimY = 20
+particleDimZ = 20
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
-particleSolidNum   = 0
-particleNum        = 0
 
 rho_L0 = 1000.0
 rho_S0 = rho_L0
 VL0    = particleRadius * particleRadius * particleRadius * 0.8 * 8.0
 VS0    = VL0 
 liqiudMass = VL0 * rho_L0
+boundary    = 2.0
 
 #kernel param
 searchR     = gridR*2.0
@@ -76,9 +75,9 @@ deltaT     = ti.field( dtype=ti.f32, shape=(1))
 #viscorcity cg sovler
 dim_coff  = 10.0
 omega = 0.5
-viscosity     = 1.0
-viscosity_b   = 2.0 * viscosity
-viscosity_err = 0.01
+viscosity     = 2.0
+viscosity_b   = 3.0
+viscosity_err = 0.05
 
 avg_density_err = ti.field( dtype=ti.f32, shape=(1))
 cg_delta     = ti.field( dtype=ti.f32, shape=(1))
@@ -93,71 +92,37 @@ cg_s   = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
 
 
 
-
-
-
-
 global hash_grid
 
-def load_boundry(filename):
+
+def init_particle(filename):
     global hash_grid
-    global particleLiquidNum
-    global particleNum
-    global particleSolidNum
+    hash_grid = HashGrid(gridR)
+    
+    ZxY = particleDimZ*particleDimY
+    dis = particleRadius * 2.0
+    for i in range(particleLiquidNum):
+        hash_grid.add_liquid_point([float(i//ZxY)* dis - particleRadius ,
+                                    float((i%ZxY)//particleDimZ)* dis + 0.1, 
+                                    float(i%particleDimZ)* dis - particleRadius])
 
-    vertices = []
-    for line in open(filename, "r"):
-        if line.startswith('#'): continue
-        values = line.split()
-        if not values: continue
-        if values[0] == 'v':
-            v = list(map(float, values[1:4]))
-            vertices.append(v)
-
-    particleSolidNum = len(vertices)
-    particleNum = particleSolidNum + particleLiquidNum
-
-    maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    for i in range(3):
-        maxboundarynp[0, i] = -10000.0
-        minboundarynp[0, i] = 10000.0
-
-    arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
-    for i in range(particleNum):
-        if i < particleLiquidNum:
-            aa = particleDimZ*particleDimY
-            x = float(i//aa - particleDimX / 2)
-            y = float((i%aa)//particleDimZ)
-            z = float(i%particleDimZ - particleDimZ/2)
-            arrV[i, 0]  = x * particleRadius*2.0
-            arrV[i, 1]  = y * particleRadius*2.0 + 0.7
-            arrV[i, 2]  = z * particleRadius*2.0
-        else:
-            arrV[i, 0] = vertices[i-particleLiquidNum][0]
-            arrV[i, 1] = vertices[i-particleLiquidNum][1]
-            arrV[i, 2] = vertices[i-particleLiquidNum][2]
-
-        for j in range(3):
-            maxboundarynp[0, j] = max(maxboundarynp[0, j], arrV[i,j])
-            minboundarynp[0, j] = min(minboundarynp[0, j], arrV[i,j])
-
-    hash_grid = HashGrid(particleNum, particleLiquidNum, maxboundarynp, minboundarynp, gridR)
-
-    hash_grid.pos.from_numpy(arrV)
-    print("grid szie:", hash_grid.gridSize, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
+    hash_grid.add_obj(filename)
+    hash_grid.setup_grid()
 
 def compute_nonpressure_force():
-
     init_viscosity_para()
+
+    global vs_iter 
     vs_iter = 0
+
     while vs_iter < 100:
         compute_viscosity_force()
         vs_iter+=1
 
-        if cg_delta[0] <= 0.01 * cg_delta_zero[0] or cg_delta_zero[0] < eps:
+        if cg_delta[0] <= viscosity_err * cg_delta_zero[0] or cg_delta_zero[0] < eps:
             break
     combine_nonpressure()
+
 
 
 def solve_pressure():
@@ -165,32 +130,12 @@ def solve_pressure():
 
     pr_iter = 0
     err  = 0.0
-    while (err > 0.0001 or pr_iter < 4) and (pr_iter < 10):
+    while (err > 0.001 or pr_iter < 2) and (pr_iter < 100):
         update_iter_info()
         update_pressure_force()
         err = avg_density_err.to_numpy()[0] / float(particleLiquidNum)
         pr_iter += 1
     
-
-
-@ti.func
-def clamp(v, low_limit, up_limit):
-    res = v
-    if res < low_limit:
-        res = low_limit
-        
-    if res > up_limit:
-        res = up_limit
-    return res
-    
-@ti.func
-def clampV(v, low_limit, up_limit):
-    res = v
-    res.x = clamp(res.x, low_limit.x, up_limit.x)
-    res.y = clamp(res.y, low_limit.y, up_limit.y)
-    res.z = clamp(res.z, low_limit.z, up_limit.z)
-    
-    return res
 
 
 @ti.func
@@ -229,18 +174,10 @@ def W(v):
 
 @ti.kernel
 def reset_particle():
-
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
         deltaT[0] = 0.001
-
-
-        
-        
-
-
-
 
 @ti.func
 def get_viscosity_Ax(x: ti.template(), i):
@@ -334,15 +271,11 @@ def combine_nonpressure():
         d_vel[i]  = gravity + (vel_guess[i] - vel[i]) / deltaT[0]
         vel_guess[i]  = vel_guess[i]-vel[i]
 
-
 @ti.kernel
-def compute_init_coff():
-
-    for i in vel:
-        vel[i]  += d_vel[i] * deltaT[0]
-
+def compute_advection():
     for i in d_ii:
         d_ii[i] = ti.Vector([0.0, 0.0, 0.0])
+        vel[i] += deltaT[0] * d_vel[i]
 
         cur_neighbor = hash_grid.neighborCount[i]
         k=0
@@ -354,8 +287,6 @@ def compute_init_coff():
             inv_den     = rho_L0 / rho[i] 
             d_ii[i]     +=  -VL0 * inv_den * inv_den * gradV
             k += 1
-
-
 
     for i in a_ii:
         a_ii[i] = 0.0
@@ -417,7 +348,7 @@ def update_pressure_force():
                 dji = VL0 / (density*density) * gradV
                 d_ji_pi = dji *  pressure_pre[i]
                 d_jk_pk = dij_pj[j] 
-                sum +=  VL0 * ( dij_pj[i] - d_ii[i]*pressure_pre[i] - (d_jk_pk - d_ji_pi)).dot(gradV)
+                sum +=  VL0 * ( dij_pj[i] - d_ii[j]*pressure_pre[j] - (d_jk_pk - d_ji_pi)).dot(gradV)
             else:
                 sum +=  VS0 * dij_pj[i].dot(gradV)
             k += 1
@@ -427,7 +358,7 @@ def update_pressure_force():
         h2     = deltaT[0] * deltaT[0]
 
         denom = a_ii[i]*h2
-        if (ti.abs(denom) > 1.0e-9):
+        if (ti.abs(denom) > eps):
             pressure[i] = ti.max(    (1.0 - omega) *pressure_pre[i] + omega / denom * (b - h2*sum), 0.0)
             #print( adv_rho[i],rho[i] / rho_L0, h2*sum, omega / denom)
         else:
@@ -435,14 +366,12 @@ def update_pressure_force():
         
         if pressure[i] != 0.0:
             avg_density_err[0] += (a_ii[i]*pressure[i]  + sum)*h2 - b
-        pressure_pre[i] = pressure[i]
         
 @ti.kernel
 def update_pos():
 
     for i in d_vel:
-        d_vel[i]      = ti.Vector([0.0, 0.0, 0.0])
-
+        d_vel[i]   = ti.Vector([0.0, 0.0, 0.0])
         cur_neighbor = hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
@@ -464,37 +393,32 @@ def update_pos():
         vel[i]  += d_vel[i] * deltaT[0]
         hash_grid.pos[i]  += vel[i]  * deltaT[0]
 
+
+
 @ti.kernel
 def draw_particle():
-    
     for i in hash_grid.pos:
         if i < particleLiquidNum:
             sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
-
-    for i in hash_grid.pos:
-        posi = hash_grid.pos[i]
-        if i> particleLiquidNum and posi.z < 0.3 and posi.z > -0.3 and posi.x < 0.99 and posi.x > -0.99 and posi.y < 1.99 and posi.y > 0.01:
-            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,0.0,0.0]))
-        elif i> particleLiquidNum and hash_grid.pos[i].z < 0.49:
+        else:
             sph_canvas.draw_point(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
+
 
 gui = ti.GUI('iisph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
-load_boundry("boundry.obj")
+init_particle("box_boundry.obj")
 reset_particle()
 
-sph_canvas.set_fov(1.0)
-sph_canvas.set_target(0.0, 1.0, 0.0)
 
 while gui.running:
 
-    sph_canvas.set_view_point(sph_canvas.yaw, sph_canvas.pitch, 0.0, 3.0)
-
+    sph_canvas.yaw_cam(0.0,1.0,0.0)
+    #sph_canvas.static_cam(0.0,1.0,0.0)
     hash_grid.update_grid()
 
     compute_density()
     compute_nonpressure_force()
-    compute_init_coff()
+    compute_advection()
     
 
     solve_pressure()
@@ -508,6 +432,8 @@ while gui.running:
     dt = deltaT.to_numpy()[0]
     current_time += dt
     print("time:%.3f"%current_time, "step:%.4f"%dt, "viscorcity:", vs_iter, "pressure:", pr_iter)
+    #print(rho.to_numpy()[test_id], d_ii.to_numpy()[test_id], a_ii.to_numpy()[test_id], dij_pj.to_numpy()[test_id])
+
     if math.isnan(hash_grid.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
         print(adv_rho.to_numpy()[test_id], hash_grid.pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         sys.exit()

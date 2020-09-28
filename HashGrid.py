@@ -3,48 +3,96 @@ import math
 import numpy as np
 import taichi as ti
 
-
-maxNeighbour = 100
+maxInGrid    = 32
+maxNeighbour = 128
 
 @ti.data_oriented
 class HashGrid:
-    def __init__(self, n, num_l, maxb, minb, gridR):
-        self.count        = n
-        self.liquid_count = num_l
-        self.invGridR = 1.0 / gridR
-        self.searchR = gridR * 2.0
+    def __init__(self, gridR):
+        self.count        = 0
+        self.liquid_count = 0
+        self.solid_count = 0
 
-        self.gridCount = ti.field(dtype=ti.i32)
-        self.grid       = ti.field(dtype=ti.i32)
+        self.invGridR     = 1.0 / gridR
+        self.gridR        = gridR
+        self.searchR      = gridR * 2.0
+
+        self.gridCount     = ti.field(dtype=ti.i32)
+        self.grid          = ti.field(dtype=ti.i32)
         self.neighborCount = ti.field(dtype=ti.i32)
-        self.neighbor = ti.field(dtype=ti.i32)
-        self.pos         = ti.Vector.field(3, dtype=ti.f32)
+        self.maxCurNeighbour  = ti.field(dtype=ti.i32)
+        self.neighbor      = ti.field(dtype=ti.i32)
+        self.pos           = ti.Vector.field(3, dtype=ti.f32)
 
-        self.blockSize  = ti.Vector.field(3, dtype=ti.i32, shape=(1))
+        self.blockSize      = ti.Vector.field(3, dtype=ti.i32, shape=(1))
         self.min_boundary   = ti.Vector.field(3, dtype=ti.f32, shape=(1))
         self.max_boundary   = ti.Vector.field(3, dtype=ti.f32, shape=(1))
+        
 
 
+        self.point_list = []
+
+        self.maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+        self.minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
+        for j in range(3):
+            self.maxboundarynp[0, j] = -10000.0
+            self.minboundarynp[0, j] = 10000.0
+
+
+    @ti.pyfunc
+    def add_liquid_point(self, point):
+        self.point_list.append(point)
+        for j in range(3):
+            self.maxboundarynp[0, j] = max(self.maxboundarynp[0, j], point[j])
+            self.minboundarynp[0, j] = min(self.minboundarynp[0, j], point[j])
+        self.count        += 1
+        self.liquid_count += 1
+
+    @ti.pyfunc
+    def add_solid_point(self, point):
+        self.point_list.append(point)
+        for j in range(3):
+            self.maxboundarynp[0, j] = max(self.maxboundarynp[0, j], point[j])
+            self.minboundarynp[0, j] = min(self.minboundarynp[0, j], point[j])
+        self.count        += 1
+        self.solid_count += 1
+
+
+    @ti.pyfunc
+    def add_obj(self, filename):
+        for line in open(filename, "r"):
+            if line.startswith('#'): 
+                continue
+            values = line.split()
+            if not values: continue
+            if values[0] == 'v':
+                v = list(map(float, values[1:4]))
+                self.add_solid_point(v)
+
+    @ti.pyfunc
+    def setup_grid(self):
         ti.root.dense(ti.i, self.count).place(self.gridCount)
-        ti.root.dense(ti.ij, (self.count, maxNeighbour)).place(self.grid)
+        ti.root.dense(ti.ij, (self.count, maxInGrid)).place(self.grid)
+        ti.root.dense(ti.i,  self.count).place(self.maxCurNeighbour)
 
         ti.root.dense(ti.i, self.liquid_count ).place(self.neighborCount)
         ti.root.dense(ti.ij, (self.liquid_count , maxNeighbour)).place(self.neighbor)
+        #ti.root.dense(ti.i, self.liquid_count ).place(self.maxCurNeighbour)
 
         ti.root.dense(ti.i, self.count ).place(self.pos)
 
         self.blocknp   = np.ones(shape=(1,3), dtype=np.int32)
         for i in range(3):
-            self.blocknp[0, i]    = int((maxb[0, i] - minb[0, i]) / gridR + 1)
+            self.blocknp[0, i]    = int((self.maxboundarynp[0, i] - self.minboundarynp[0, i]) / self.gridR + 1)
 
         self.gridSize     = int(self.blocknp[0, 0]*self.blocknp[0, 1]*self.blocknp[0, 2])
-        self.max_boundary.from_numpy(maxb)
-        self.min_boundary.from_numpy(minb)
+
+        self.max_boundary.from_numpy(self.maxboundarynp)
+        self.min_boundary.from_numpy(self.minboundarynp)
         self.blockSize.from_numpy(self.blocknp)
+        self.pos.from_numpy(np.array(self.point_list, dtype = np.float32))
+        print("grid szie:", self.gridSize, "liqiud particle num:", self.liquid_count, "solid particle num:", self.solid_count)
 
-
-
-    
     @ti.kernel
     def update_grid(self):
         for i,j in self.grid:
@@ -61,9 +109,9 @@ class HashGrid:
             if self.check_in_box(indexV) == 1:
                 hash_index     = self.get_cell_hash(indexV)
                 old = ti.atomic_add(self.gridCount[hash_index] , 1)
-                if old > maxNeighbour-1:
+                if old > maxInGrid-1:
                     print("exceed grid", old)
-                    self.gridCount[hash_index] = maxNeighbour
+                    self.gridCount[hash_index] = maxInGrid
                 else:
                     self.grid[hash_index, old] = i
         
@@ -116,3 +164,31 @@ class HashGrid:
            (index.z < 0) or (index.z >= self.blockSize[0].z):
             ret = 0
         return ret
+
+
+    @ti.kernel
+    def process_neighbour(self, index: ti.i32):
+        for i in self.maxCurNeighbour:
+            if i % index == 0:
+                offcet = int(index / 2)
+
+                indexi = self.gridCount[i]
+                indexj = self.gridCount[i+offcet]
+
+                #indexi = self.neighborCount[i]
+                #indexj = self.neighborCount[i+offcet]
+
+                if indexi > indexj:
+                    self.maxCurNeighbour[i] = indexi
+                else:
+                    self.maxCurNeighbour[i] = indexj
+
+    @ti.pyfunc
+    def get_max_neighbour(self):
+        size = 2
+        while size < self.liquid_count:
+            self.process_neighbour(size)
+            size = size*2
+
+        print(self.maxCurNeighbour.to_numpy()[0])
+    

@@ -11,24 +11,22 @@ ti.init(arch=ti.gpu,advanced_optimization=True)
 
 
 #gui param
-imgSizeX = 720
-imgSizeY = 480
+imgSizeX = 512
+imgSizeY = 512
 current_time = 0.0
 total_time   = 5.0
 eps = 1e-5
-test_id = 1000
+test_id = 0
 
 
 #particle param
 particleRadius = 0.025
 gridR       = particleRadius * 2.0
 invGridR    = 1.0 / gridR
-particleDimX = 20
-particleDimY = 12
-particleDimZ = 12
+particleDimX = 24
+particleDimY = 10
+particleDimZ = 10
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
-particleSolidNum   = 0
-particleNum        = 0
 
 rho_L0 = 1000.0
 rho_S0 = rho_L0
@@ -68,15 +66,15 @@ dv_iter = 0
 pr_iter = 0
 
 user_max_t     = 0.005
-user_min_t     = 0.00005
+user_min_t     = 0.0001
 deltaT     = ti.field( dtype=ti.f32, shape=(1))
 
 
 #viscorcity cg sovler
 dim_coff  = 10.0
-viscosity     = 1.0
-viscosity_b   = 2.0 * viscosity
-viscosity_err = 0.01
+viscosity     = 5.0
+viscosity_b   = 3.0
+viscosity_err = 0.05
 
 avg_density_err = ti.field( dtype=ti.f32, shape=(1))
 cg_delta     = ti.field( dtype=ti.f32, shape=(1))
@@ -98,62 +96,27 @@ tension_gradc  = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 
 global sph_canvas
 global hash_grid
-def load_boundry(filename):
+
+def init_particle(filename):
     global hash_grid
-    global particleLiquidNum
-    global particleNum
-    global particleSolidNum
-
-    vertices = []
-    for line in open(filename, "r"):
-        if line.startswith('#'): continue
-        values = line.split()
-        if not values: continue
-        if values[0] == 'v':
-            v = list(map(float, values[1:4]))
-            vertices.append(v)
-
-    particleSolidNum = len(vertices)
-    particleNum = particleSolidNum + particleLiquidNum
-
-    maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-    for i in range(3):
-        maxboundarynp[0, i] = -10000.0
-        minboundarynp[0, i] = 10000.0
-
-    arrV = np.ones(shape=(particleNum, 3), dtype=np.float32)
-    for i in range(particleNum):
-        if i < particleLiquidNum:
-            aa = particleDimZ*particleDimY
-            x = float(i//aa - particleDimX / 2)
-            y = float((i%aa)//particleDimZ)
-            z = float(i%particleDimZ - particleDimZ/2)
-            arrV[i, 0]  = x * particleRadius*2.0
-            arrV[i, 1]  = y * particleRadius*2.0 + 0.7
-            arrV[i, 2]  = z * particleRadius*2.0
-        else:
-            arrV[i, 0] = vertices[i-particleLiquidNum][0]
-            arrV[i, 1] = vertices[i-particleLiquidNum][1]
-            arrV[i, 2] = vertices[i-particleLiquidNum][2]
-
-        for j in range(3):
-            maxboundarynp[0, j] = max(maxboundarynp[0, j], arrV[i,j])
-            minboundarynp[0, j] = min(minboundarynp[0, j], arrV[i,j])
-
-    hash_grid = HashGrid(particleNum, particleLiquidNum, maxboundarynp, minboundarynp, gridR)
-
-    hash_grid.pos.from_numpy(arrV)
-    print("grid szie:", hash_grid.gridSize, "liqiud particle num:", particleLiquidNum, "solid particle num:", particleSolidNum)
-
+    hash_grid = HashGrid(gridR)
+    
+    ZxY = particleDimZ*particleDimY
+    dis = particleRadius * 2.0
+    for i in range(particleLiquidNum):
+        hash_grid.add_liquid_point([float(i//ZxY - particleDimX /2)* dis ,
+                                    float((i%ZxY)//particleDimZ)* dis + 0.7, 
+                                    float(i%particleDimZ-particleDimZ /2)* dis])
+    hash_grid.add_obj(filename)
+    hash_grid.setup_grid()
+    
 def compute_nonpressure_force():
 
     global vs_iter
     clear_nonpressure()
 
-
     #surface tension
-    #compute_tension()
+    compute_tension()
 
     #pre cg for viscorcity
     init_viscosity_para()
@@ -163,8 +126,8 @@ def compute_nonpressure_force():
         vs_iter+=1
         if cg_delta[0] <= viscosity_err * cg_delta_zero[0] or cg_delta_zero[0] < eps:
             break
+    end_viscosity()
 
-    combine_nonpressure()
 
 
 def optimize_time_step():
@@ -181,7 +144,7 @@ def optimize_time_step():
         time_step =  cfl_factor * 0.4 * particleRadius * 2.0 / math.sqrt(vel_max_np[0])
         time_step = min(time_step, user_max_t)
         time_step = max(time_step, user_min_t)
-
+ 
         iter = max(vs_iter, max(pr_iter, vs_iter))
         if iter > 10:
             deltaT_np[0] *= 0.9
@@ -193,14 +156,17 @@ def optimize_time_step():
 
 def solve_vel_divergence():
     global dv_iter 
+    dv_iter = 0
 
     warmstart_divergence_vel()
     err  = 0.0
+    begin_divergence_iter()
 
     while (err > 0.001 or dv_iter < 2) and (dv_iter < 100):
         divergence_iter()        
         err = avg_density_err.to_numpy()[0] / float(particleLiquidNum)
         dv_iter += 1
+
     end_divergence_iter()
 
 
@@ -208,15 +174,18 @@ def solve_vel_divergence():
 def solve_pressure():
     global pr_iter 
 
-    warmstart_pressure()
+
+    warmstart_pressure() 
     pr_iter = 0
     err  = 0.0
-    while (err > 0.001 or pr_iter < 2) and (pr_iter < 100):
+    begin_pressure_iter()
+    
+
+    while (err > 0.001 or pr_iter < 2 ) and (pr_iter < 100):
         pressure_iter()
         err = avg_density_err.to_numpy()[0] / float(particleLiquidNum)
         pr_iter += 1
     end_pressure_iter()
-    
            
 @ti.func
 def gradW(r):
@@ -407,11 +376,10 @@ def clear_nonpressure():
 
 
 @ti.kernel
-def combine_nonpressure():
+def end_viscosity():
     for i in vel:
         d_vel[i]  += (vel_guess[i] - vel[i]) / deltaT[0]
         vel_guess[i]    = vel_guess[i] - vel[i]
-        vel[i]  += d_vel[i] * deltaT[0]
 
 @ti.kernel
 def compute_dfsph_coff():
@@ -449,20 +417,20 @@ def update_drho_divergence(i):
     cur_neighbor = hash_grid.neighborCount[i]
     k=0
     adv_rho[i] = 0.0
+    while k < cur_neighbor:
+        j = hash_grid.neighbor[i, k]
+        r = hash_grid.pos[i] - hash_grid.pos[j]
+        gradV = gradW(r)
 
-    if cur_neighbor >= 20:
-        while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
-            r = hash_grid.pos[i] - hash_grid.pos[j]
-            gradV = gradW(r)
+        if j < particleLiquidNum:
+            adv_rho[i] += VL0 * ( (vel[i]-vel[j]).dot(gradV))
+        else:
+            adv_rho[i] += VS0 * ( vel[i].dot(gradV) )
+        k += 1
+    adv_rho[i] = max(adv_rho[i], 0.0)
 
-            if j < particleLiquidNum:
-                adv_rho[i] += VL0 * (vel[i]-vel[j]).dot(gradV)
-            else:
-                adv_rho[i] += VS0 * vel[i].dot(gradV)
-            k += 1
-
-        adv_rho[i] = max(adv_rho[i], 0.0)
+    if cur_neighbor < 20:
+        adv_rho[i]  = 0.0
 
 @ti.func
 def update_drho_pressure(i):
@@ -476,13 +444,13 @@ def update_drho_pressure(i):
         gradV = gradW(r)
 
         if j < particleLiquidNum:
-            temp += VL0 * (vel[i]-vel[j]).dot(gradV)
+            temp += VL0 * ((vel[i]-vel[j]).dot(gradV))
         else:
-            temp += VL0 * vel[i].dot(gradV)
+            temp += VL0 * (vel[i].dot(gradV))
         k += 1
 
     adv_rho[i] = rho[i] / rho_L0 + deltaT[0] * temp
-    adv_rho[i] = max(1.0, adv_rho[i])
+    adv_rho[i] = ti.max(1.0, adv_rho[i])
 
 
 @ti.kernel
@@ -491,7 +459,7 @@ def warmstart_divergence_vel():
         kappa_v[i] = 0.5 * max(kappa_v[i] / deltaT[0] , -0.5*rho_L0*rho_L0)
         update_drho_divergence(i)
 
-    for i in kappa_v:
+    for i in vel:
         if adv_rho[i] > 0.0:
             cur_neighbor = hash_grid.neighborCount[i]
             k=0
@@ -511,9 +479,11 @@ def warmstart_divergence_vel():
                     vel[i] += deltaT[0] * ki * VS0 * gradV
                 k += 1
 
+@ti.kernel
+def  begin_divergence_iter():
     for i in kappa_v:
         update_drho_divergence(i)
-        alpha_coff[i] =  alpha_coff[i]  / deltaT[0]
+        alpha_coff[i] =  alpha_coff[i] /  deltaT[0] 
         kappa_v[i] = 0.0
         
 
@@ -521,10 +491,8 @@ def warmstart_divergence_vel():
 def  divergence_iter():
     for i in vel:
         avg_density_err[0] = 0.0
-        
         cur_neighbor = hash_grid.neighborCount[i]
         k=0
-
 
         bi = adv_rho[i]
         ki = bi * alpha_coff[i]
@@ -534,16 +502,18 @@ def  divergence_iter():
             j = hash_grid.neighbor[i, k]
             r = hash_grid.pos[i] - hash_grid.pos[j]
             gradV=gradW(r)
+
             if j < particleLiquidNum:
                 sum = ki + alpha_coff[j] *adv_rho[j]
                 if abs(sum) > eps:
                     vel[i] += deltaT[0] * sum * VL0*gradV
-            elif abs(ki) > eps:
-                vel[i] += deltaT[0] * ki * VS0 * gradV
+            else:
+                if ti.abs(ki) > eps:
+                    vel[i] += deltaT[0] * ki * VS0 * gradV
 
             k += 1 
     
-    for i in vel:
+    for i in adv_rho:
         update_drho_divergence(i)
         avg_density_err[0] += adv_rho[i]
 
@@ -557,11 +527,10 @@ def  end_divergence_iter():
 
 @ti.kernel
 def warmstart_pressure():
-
     for i in kappa:
         kappa[i] = max(kappa[i] / deltaT[0] / deltaT[0] , -0.5*rho_L0*rho_L0)
 
-    for i in vel:
+    for i in adv_rho:
         if adv_rho[i] > rho_L0:
             cur_neighbor = hash_grid.neighborCount[i]
             k=0
@@ -574,14 +543,17 @@ def warmstart_pressure():
                 if j < particleLiquidNum:
                     sum = kappa[i] + kappa[j]
                     if abs(sum) > eps:
-                        vel[i] += deltaT[0] * sum * VL0*gradV
+                        vel[i] += deltaT[0] * sum * VL0 * gradV 
                 elif abs(kappa[i]) > eps:
-                    vel[i] += -deltaT[0] * kappa_v[i] * VS0 * gradV
+                    vel[i] += deltaT[0] * kappa_v[i] * VS0 * gradV
                 k += 1
-        
+
+
+@ti.kernel
+def begin_pressure_iter():
     for i in kappa:
         update_drho_pressure(i)
-        alpha_coff[i] *= 1.0 / deltaT[0] / deltaT[0]
+        alpha_coff[i] = alpha_coff[i] / deltaT[0] / deltaT[0]
         kappa[i] = 0.0
 
 @ti.kernel
@@ -597,16 +569,16 @@ def  pressure_iter():
 
         while k < cur_neighbor:
             j = hash_grid.neighbor[i, k]
-            r = hash_grid.pos[i] -hash_grid. pos[j]
+            r = hash_grid.pos[i] -hash_grid.pos[j]
             gradV=gradW(r)
 
             if j < particleLiquidNum:
                 bj = adv_rho[j] - 1.0
                 kj = bj * alpha_coff[j]
                 sum = ki + kj
-                if abs(sum) > eps:
+                if ti.abs(sum) > eps:
                     vel[i] += deltaT[0] * sum * VL0 * gradV
-            elif abs(ki) > eps:
+            elif ti.abs(ki) > eps:
                 vel[i] += deltaT[0] * ki * VS0 * gradV
 
             k += 1 
@@ -615,12 +587,17 @@ def  pressure_iter():
         update_drho_pressure(i)
         avg_density_err[0] += adv_rho[i]-1.0
 
+@ti.kernel
+def  end_pressure_iter():
+    for i in kappa:
+        kappa[i] *= deltaT[0] * deltaT[0]
+
 
 @ti.kernel
 def cfl_time_step(index: ti.i32):
     for i in vel_max:
         if index == 1:
-            vel_max[i] = vel[i].norm_sqr()
+            vel_max[i] = ti.max( (vel[i] + d_vel[i] * deltaT[0]).norm_sqr(), 0.1)
         elif i % index == 0:
             offcet = int(index / 2)
             vi = vel_max[i]
@@ -631,10 +608,12 @@ def cfl_time_step(index: ti.i32):
             else:
                 vel_max[i] =   vj
 
+ 
+
 @ti.kernel
-def  end_pressure_iter():
-    for i in kappa:
-        kappa[i] *= deltaT[0] * deltaT[0] 
+def  update_vel():
+    for i in vel:
+        vel[i]  += d_vel[i]  * deltaT[0]
 
 @ti.kernel
 def  update_pos():
@@ -645,42 +624,41 @@ def  update_pos():
 @ti.kernel
 def draw_particle():
     
-    for i in hash_grid. pos:
+    for i in hash_grid.pos:
         if i < particleLiquidNum:
             sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
-
+    
     for i in hash_grid.pos:
         posi = hash_grid.pos[i]
         if i> particleLiquidNum and posi.z < 0.3 and posi.z > -0.3 and posi.x < 0.99 and posi.x > -0.99 and posi.y < 1.99 and posi.y > 0.01:
             sph_canvas.draw_sphere(posi, ti.Vector([1.0,0.0,0.0]))
-        elif i> particleLiquidNum:
+        else:
             sph_canvas.draw_point(posi, ti.Vector([0.3,0.3,0.3]))
 
 
 gui = ti.GUI('dfsph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
-load_boundry("boundry.obj")
+#init_particle("box_boundry.obj")
+init_particle("boundry.obj")
 reset_particle()
 
-sph_canvas.set_fov(1.0)
-sph_canvas.set_target(0.0, 1.0, 0.0)
+
 while gui.running:
 
-    sph_canvas.set_view_point(sph_canvas.yaw, sph_canvas.pitch, 0.0, 3.0)
+    sph_canvas.pitch_cam(0.0,1.0,0.0)
+    #sph_canvas.static_cam(0.0,1.0,0.0)
     hash_grid.update_grid()
 
     compute_density()
     compute_dfsph_coff()
-
-
     solve_vel_divergence()
-    optimize_time_step()
+
     compute_nonpressure_force()
+    optimize_time_step()
+    update_vel()
+
     solve_pressure()
-
-
     update_pos()
-
 
     sph_canvas.clear_canvas()
     draw_particle()
@@ -689,7 +667,6 @@ while gui.running:
 
     dt = deltaT.to_numpy()[0]
     current_time += dt
-    
 
     print("time:%.3f"%current_time, "step:%.4f"%dt, "viscorcity:", vs_iter, "divergence:", dv_iter, "pressure:", pr_iter)
     if math.isnan(hash_grid.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
