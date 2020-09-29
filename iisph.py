@@ -173,7 +173,7 @@ def W(v):
     return W_norm(v.norm())
 
 @ti.kernel
-def reset_particle():
+def reset_param():
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
@@ -407,7 +407,7 @@ def draw_particle():
 gui = ti.GUI('iisph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
 init_particle("box_boundry.obj")
-reset_particle()
+reset_param()
 
 
 while gui.running:
@@ -432,7 +432,7 @@ while gui.running:
     dt = deltaT.to_numpy()[0]
     current_time += dt
     print("time:%.3f"%current_time, "step:%.4f"%dt, "viscorcity:", vs_iter, "pressure:", pr_iter)
-    #print(rho.to_numpy()[test_id], d_ii.to_numpy()[test_id], a_ii.to_numpy()[test_id], dij_pj.to_numpy()[test_id])
+    #sph_canvas.export_png(current_time)
 
     if math.isnan(hash_grid.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
         print(adv_rho.to_numpy()[test_id], hash_grid.pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])

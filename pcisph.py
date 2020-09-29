@@ -189,7 +189,7 @@ def W(v):
     return W_norm(v.norm())
 
 @ti.kernel
-def reset_particle():
+def reset_param():
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         deltaT[0] = 0.001
@@ -295,11 +295,13 @@ sph_canvas = Canvas(imgSize, imgSize)
 init_particle("boundry.obj")
 
 pci_coff = GetPciCoff()
-reset_particle()
+reset_param()
 
 
 while gui.running:
-    sph_canvas.static_cam(0.0,0.0,0.0)
+    #sph_canvas.static_cam(0.0,0.0,0.0)
+    sph_canvas.yaw_cam(0.0,0.0,0.0)
+
     hash_grid.update_grid()
 
     compute_nonpressure_force()

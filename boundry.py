@@ -22,7 +22,6 @@ gridR          = particleRadius / math.sqrt(3.0)
 
 tri_vertices = ti.Vector(3, dt=ti.f32)
 tri_normal   = ti.Vector(3, dt=ti.f32)
-tri_face     = ti.Vector(3, dt=ti.i32)
 
 init_pos = ti.Vector(3, dt=ti.f32)
 init_cell = ti.Vector(3, dt=ti.i32)
@@ -123,51 +122,49 @@ def loadObj(filename):
     global hMap
     
     faceNum = len(faces)//3
-    verticeNum = len(vertices)
+    verticeNum = faceNum * 3
     
 
     arrV = np.ones(shape=(verticeNum, 3), dtype=np.float32)
     arrN = np.ones(shape=(verticeNum, 3), dtype=np.float32)
-    arrF = np.ones(shape=(faceNum, 3), dtype=np.int32)
     arrArea = np.ones(shape=(faceNum), dtype=np.float32)
 
-    for i in range(verticeNum):
-        arrV[i, 0] = vertices[i][0]
-        arrV[i, 1] = vertices[i][1]
-        arrV[i, 2] = vertices[i][2]
-
-        min_point[0] = min(arrV[i, 0], min_point[0])
-        min_point[1] = min(arrV[i, 1], min_point[1])
-        min_point[2] = min(arrV[i, 2], min_point[2])
-
-        max_point[0] = max(arrV[i, 0], max_point[0])
-        max_point[1] = max(arrV[i, 1], max_point[1])
-        max_point[2] = max(arrV[i, 2], max_point[2])
-    
     for i in range(faceNum):
-        arrF[i, 0] = faces[3*i]-1
-        arrF[i, 1] = faces[3*i+1]-1
-        arrF[i, 2] = faces[3*i+2]-1
+        index_a = faces[3*i]-1
+        index_b = faces[3*i+1]-1
+        index_c = faces[3*i+2]-1
 
-        a = arrV[arrF[i, 0]]
-        b = arrV[arrF[i, 1]]
-        c = arrV[arrF[i, 2]]
+        a = np.array(vertices[index_a])
+        b = np.array(vertices[index_b])
+        c = np.array(vertices[index_c])
+
+        for j in range(3):
+            min_point[j] = min(a[j], min_point[j])
+            max_point[j] = max(a[j], max_point[j])
+
+            min_point[j] = min(b[j], min_point[j])
+            max_point[j] = max(b[j], max_point[j])
+
+            min_point[j] = min(c[j], min_point[j])
+            max_point[j] = max(c[j], max_point[j])
+
+        arrV[3*i+0] = a
+        arrV[3*i+1] = b
+        arrV[3*i+2] = c
 
         d1 = b - a
         d2 = c - a
+        n= np.cross(d1, d2)
+        arrArea[i] = np.linalg.norm(n)* 0.5
 
-
-        arrN[arrF[i, 0]] = np.cross(d1, d2)
-        arrArea[i] = np.linalg.norm(arrN[arrF[i, 0]])* 0.5
-
-        arrN[arrF[i, 0]] = arrN[arrF[i, 0]] / np.linalg.norm(arrN[arrF[i, 0]])
-        arrN[arrF[i, 1]] = arrN[arrF[i, 0]]
-        arrN[arrF[i, 2]] = arrN[arrF[i, 0]]
+        n = n / np.linalg.norm(n)
+        arrN[3*i+0] = n
+        arrN[3*i+1] = n
+        arrN[3*i+2] = n
 
         totalArea += arrArea[i]
         maxArea = max(arrArea[i], maxArea)
 
-    
     circleArea = pi * particleRadius * particleRadius
     numInitialPoints = (int)(40.0 * (totalArea / circleArea)) 
     padding_num = get_pot_num(numInitialPoints) <<1
@@ -183,7 +180,6 @@ def loadObj(filename):
     ti.root.dense(ti.i, verticeNum ).place(tri_vertices)
     ti.root.dense(ti.i, verticeNum ).place(tri_normal)
 
-    ti.root.dense(ti.i, faceNum).place(tri_face)
     ti.root.dense(ti.i, faceNum).place(tri_area)
 
     ti.root.dense(ti.i,  padding_num).place(init_pos)
@@ -198,7 +194,6 @@ def loadObj(filename):
     hMap = HashMap(hash_map_size)
 
     tri_vertices.from_numpy(arrV)
-    tri_face.from_numpy(arrF)
     tri_normal.from_numpy(arrN)
     tri_area.from_numpy(arrArea)
 
@@ -240,9 +235,9 @@ def init_point_set():
                 if (ti.random() < tri_area[randIndex] / maxArea):
                     break
                 
-            a = tri_vertices[tri_face[randIndex][0]]
-            b = tri_vertices[tri_face[randIndex][1]]
-            c = tri_vertices[tri_face[randIndex][2]]
+            a = tri_vertices[3*randIndex + 0]
+            b = tri_vertices[3*randIndex + 1]
+            c = tri_vertices[3*randIndex + 2]
 
             init_pos[i]  = bc1*a + bc2*b + bc3*c
             init_id[i]   = randIndex
@@ -362,6 +357,7 @@ def check_cell_distance(neighbor_cell, cur_index):
 
         dist = (cur_pos - neighbor_pos).norm()
 
+
         if cur_id != neighbor_id:
             v = (cur_pos - neighbor_pos).normalized()
             c1 = tri_normal[cur_id].dot(v)
@@ -370,7 +366,7 @@ def check_cell_distance(neighbor_cell, cur_index):
                 dist *= (ti.asin(c1) - ti.asin(c2)) / (c1 - c2)
             else:
                 dist /= ti.sqrt(1.0 - c1*c1)
-  
+
         if (dist < particleRadius):
             ret = 1
         count += 1
@@ -385,7 +381,7 @@ def check_cell(cur_index):
     for i in range(-2,3):
         for j in range(-2,3):
             for k in range(-2,3):
-                ret += check_cell_distance(ti.Vector([i, j, k]) + init_cell[cur_index], cur_index)
+                    ret += check_cell_distance(ti.Vector([i, j, k]) + init_cell[cur_index], cur_index)
     return ret
 
 

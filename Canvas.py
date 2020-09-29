@@ -27,8 +27,11 @@ class Canvas:
         self.fov        = 1.0
         self.near       = 1.0
         self.far        = 1000.0
-        
         self.ortho = 0
+
+        self.frame      = 0
+        self.fps      = 20.0
+        
 
 
     @ti.pyfunc
@@ -39,7 +42,7 @@ class Canvas:
         self.target[1] = targety
         self.target[2] = targetz
         if self.yaw < 3.14:
-            self.set_view_point(self.yaw + 0.01, 0.0, 0.0, 3.0)
+            self.set_view_point(self.yaw + 0.003, 0.0, 0.0, 3.0)
 
     @ti.pyfunc
     def pitch_cam(self, targetx, targety, targetz):
@@ -117,6 +120,14 @@ class Canvas:
         self.target[2] = targetz
         self.update_cam()
 
+
+    @ti.pyfunc
+    def export_png(self, time):
+        time_i = int(time * self.fps )
+        if int(time_i) == self.frame:
+            ti.imwrite(self.img, str(self.frame)  + ".png")
+            self.frame+=1
+
     @ti.func
     def transform(self, v):
         screenP  = self.proj[0] @ self.view[0] @ ti.Vector([v.x, v.y, v.z, 1.0])
@@ -191,3 +202,6 @@ class Canvas:
         for i, j in self.img:
             self.img[i, j]=ti.Vector([0, 0, 0])
             self.depth[i, j] = 1.0
+
+
+    

@@ -123,7 +123,7 @@ def W(v):
     return W_norm(v.norm())
 
 @ti.kernel
-def reset_particle():
+def reset_param():
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
         pressure[i] = 0.0
@@ -207,7 +207,7 @@ def draw_particle():
 gui = ti.GUI('sesph', res=(imgSize, imgSize))
 sph_canvas = Canvas(imgSize, imgSize)
 init_particle("boundry.obj")
-reset_particle()
+reset_param()
 
 while gui.running:
     sph_canvas.static_cam(0.0,0.0,0.0)

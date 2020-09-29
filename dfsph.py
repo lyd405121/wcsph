@@ -23,7 +23,7 @@ test_id = 0
 particleRadius = 0.025
 gridR       = particleRadius * 2.0
 invGridR    = 1.0 / gridR
-particleDimX = 24
+particleDimX = 20
 particleDimY = 10
 particleDimZ = 10
 particleLiquidNum  = particleDimX*particleDimY*particleDimZ
@@ -45,10 +45,12 @@ m_l   = 48.0 / (pi*h3)
 
 #advetion param
 gravity    = ti.Vector([0.0, -9.81, 0.0])
-vel_guess   = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
-vel         = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
-vel_max      = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
-d_vel       = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+vel_guess  = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+vel        = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+omega      = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+vel_max    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+d_vel      = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+d_omega    = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
 
 #pressure param
 alpha_coff  = ti.field(dtype=ti.f32, shape=(particleLiquidNum))
@@ -71,10 +73,10 @@ deltaT     = ti.field( dtype=ti.f32, shape=(1))
 
 
 #viscorcity cg sovler
-dim_coff  = 10.0
-viscosity     = 5.0
-viscosity_b   = 3.0
-viscosity_err = 0.05
+dim_coff          = 10.0
+viscosity         = 5.0
+viscosity_b       = 3.0
+viscosity_err     = 0.05
 
 avg_density_err = ti.field( dtype=ti.f32, shape=(1))
 cg_delta     = ti.field( dtype=ti.f32, shape=(1))
@@ -93,6 +95,10 @@ tension_coff_b   = 0.1 * tension_coff
 tension_c      = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 tension_gradc  = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 
+#vorcity_coff
+viscosity_omega   = 0.1
+vorticity_coff  = 0.01
+vorticity_init  = 0.5
 
 global sph_canvas
 global hash_grid
@@ -107,6 +113,13 @@ def init_particle(filename):
         hash_grid.add_liquid_point([float(i//ZxY - particleDimX /2)* dis ,
                                     float((i%ZxY)//particleDimZ)* dis + 0.7, 
                                     float(i%particleDimZ-particleDimZ /2)* dis])
+    '''
+    for i in range(particleLiquidNum):
+        hash_grid.add_liquid_point([float(i//ZxY)* dis - particleRadius ,
+                                    float((i%ZxY)//particleDimZ)* dis + 0.1, 
+                                    float(i%particleDimZ)* dis - particleRadius])
+    '''
+
     hash_grid.add_obj(filename)
     hash_grid.setup_grid()
     
@@ -127,6 +140,9 @@ def compute_nonpressure_force():
         if cg_delta[0] <= viscosity_err * cg_delta_zero[0] or cg_delta_zero[0] < eps:
             break
     end_viscosity()
+
+    #compute vorticity
+    compute_vorticity()
 
 
 
@@ -159,12 +175,14 @@ def solve_vel_divergence():
     dv_iter = 0
 
     warmstart_divergence_vel()
-    err  = 0.0
+    err  = -0.1
     begin_divergence_iter()
 
-    while (err > 0.001 or dv_iter < 2) and (dv_iter < 100):
+    deltaT_np = deltaT.to_numpy()
+
+    while (avg_density_err.to_numpy()[0] > err) and (dv_iter < 10):
         divergence_iter()        
-        err = avg_density_err.to_numpy()[0] / float(particleLiquidNum)
+        err = 0.001 * float(particleLiquidNum) / deltaT_np[0]
         dv_iter += 1
 
     end_divergence_iter()
@@ -222,13 +240,16 @@ def W(v):
     return W_norm(v.norm())
 
 @ti.kernel
-def reset_particle():
+def reset_param():
 
     for i in vel:
         vel[i]      = ti.Vector([0.0, 0.0, 0.0])
+        omega[i] = ti.Vector([0.0, 0.0, 0.0])
+        
         pressure[i] = 0.0
         kappa_v[i]  = 0.0
         kappa[i] = 0.0
+
         deltaT[0] = 0.001
 
     
@@ -367,6 +388,33 @@ def compute_tension():
             else:
                 d_vel[i]     +=  factorb * VS0 * tension_gradc[i]  * gardV 
             k += 1
+
+
+
+@ti.kernel
+def compute_vorticity():
+    for i in omega:
+        d_omega[i]  = ti.Vector([0.0, 0.0, 0.0])
+        cur_neighbor     =  hash_grid.neighborCount[i]
+        k=0
+
+        while k < cur_neighbor:
+            j = hash_grid.neighbor[i, k]
+            r = hash_grid.pos[i] - hash_grid.pos[j]
+            gradV = gradW(r)
+
+            if j < particleLiquidNum:
+                d_omega[i] += -1.0 / deltaT[0] * vorticity_init* viscosity_omega *(liqiudMass/rho[j])*  (omega[i] - omega[j]) * W(r)
+                d_vel[i] += vorticity_coff / rho[i] * liqiudMass * (omega[i] - omega[j]).cross(gradV)
+                d_omega[i] += vorticity_coff / rho[i]* vorticity_init * liqiudMass * (vel[i]-vel[j]).cross(gradV)
+            else:
+                d_vel[i] += vorticity_coff / rho[i] * rho_L0 * VS0 * (omega[i] - omega[j]).cross(gradV)
+                d_omega[i] += vorticity_coff / rho[i]* vorticity_init * rho_L0* VL0* (vel[i]-vel[j]).cross(gradV)
+            d_omega[i] += -2.0 * vorticity_init * vorticity_coff * omega[i]
+            k += 1
+
+    for i in omega:
+        omega[i] += d_omega[i] * deltaT[0]
 
 
 @ti.kernel
@@ -638,15 +686,15 @@ def draw_particle():
 
 gui = ti.GUI('dfsph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
-#init_particle("box_boundry.obj")
 init_particle("boundry.obj")
-reset_particle()
-
+reset_param()
 
 while gui.running:
 
-    sph_canvas.pitch_cam(0.0,1.0,0.0)
+    sph_canvas.pitch_cam(0.0, 1.0, 0.0)
+    #sph_canvas.yaw_cam(0.0,1.0,0.0)
     #sph_canvas.static_cam(0.0,1.0,0.0)
+
     hash_grid.update_grid()
 
     compute_density()
@@ -669,6 +717,8 @@ while gui.running:
     current_time += dt
 
     print("time:%.3f"%current_time, "step:%.4f"%dt, "viscorcity:", vs_iter, "divergence:", dv_iter, "pressure:", pr_iter)
+    #sph_canvas.export_png(current_time)
+
     if math.isnan(hash_grid.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
         print(adv_rho.to_numpy()[test_id], hash_grid.pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         sys.exit()
