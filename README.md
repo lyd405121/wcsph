@@ -1,12 +1,14 @@
 Current implement:
 
-
 **Sesph algrithm** 
 
-**Pcisph implement**
+**Pcisph algrithm**
 
-**Iisph implement** 
+**Iisph algrithm** 
 
+**Dfsph algrithm** 
+
+**possion sample with Geodesic Distance for boundry handling** 
 
 ![image](https://github.com/lyd405121/wcsph/blob/master/max-t.png)
 
@@ -33,3 +35,17 @@ M Weiler 2018: A physically consistent implicit viscosity solver for SPH fluids:
 use precondition cg to solve viscosity:
 
 ![image](https://github.com/lyd405121/wcsph/blob/master/average_iter_num.png)
+
+new feature:
+
+[1]refactoring camera animation and hash grid
+
+[2]suport cfl time step and dfsph
+
+[3]tension  and vorticity
+
+![image](https://github.com/lyd405121/wcsph/blob/master/dfsph_l.gif)
+
+![image](https://github.com/lyd405121/wcsph/blob/master/iisph_l.gif)
+
+
