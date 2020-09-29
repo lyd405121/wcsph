@@ -17,8 +17,6 @@ Current implement:
 
 iisph show:
 
-![image](https://github.com/lyd405121/wcsph/blob/master/iisph.gif)
-
 ![image](https://github.com/lyd405121/wcsph/blob/master/visorcity.gif)
 
 
