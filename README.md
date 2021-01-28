@@ -23,30 +23,38 @@
 
 ###  Implicit viscosity solver 
 
-![image](super_nian.gif)
+<img src="super_nian.gif" width="25%" height="25%" />
 
-![image](rock.gif)
+<img src="rock.gif" width="25%" height="25%" />
+
+---
 
 ###  Use precondition cg to solve viscosity:
 
-![image](average_iter_num.png)
+<img src="average_iter_num.png" width="25%" height="25%" />
 
+---
 
 ###  Surface tension (without & with):
 
 ![image](no_tension.gif) ![image](tension.gif)
 
+---
 
 ###  anistropic mesh restruction :
 
 - marching cube 
 
-![image](mc.png)
+<img src="mc.png" width="25%" height="25%" />
 
 - using anistropic kernel to build the volume field
 
-![image](ani-mc.png)
+<img src="ani-mc.png" width="25%" height="25%" />
 
+- render image
+
+<img src="out/rendering.png" width="25%" height="25%" />
+---
 
 ###  Other algorithm:
 
