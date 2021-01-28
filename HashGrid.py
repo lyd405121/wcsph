@@ -3,95 +3,55 @@ import math
 import numpy as np
 import taichi as ti
 
-maxInGrid    = 32
-maxNeighbour = 128
+#from ParticleData import ParticleData
 
 @ti.data_oriented
 class HashGrid:
-    def __init__(self, gridR):
-        self.count        = 0
-        self.liquid_count = 0
-        self.solid_count = 0
+    def __init__(self, gridR, maxInGrid, maxNeighbour, particle_data):
 
-        self.invGridR     = 1.0 / gridR
-        self.gridR        = gridR
-        self.searchR      = gridR * 2.0
+        self.maxInGrid       = maxInGrid
+        self.maxNeighbour    = maxNeighbour
 
-        self.gridCount     = ti.field(dtype=ti.i32)
-        self.grid          = ti.field(dtype=ti.i32)
-        self.neighborCount = ti.field(dtype=ti.i32)
-        self.maxCurNeighbour  = ti.field(dtype=ti.i32)
-        self.neighbor      = ti.field(dtype=ti.i32)
-        self.pos           = ti.Vector.field(3, dtype=ti.f32)
+        self.particle_data   = particle_data
+        self.invGridR        = 1.0 / gridR
+        self.gridR           = gridR
+        self.searchR         = gridR * 2.0
 
-        self.blockSize      = ti.Vector.field(3, dtype=ti.i32, shape=(1))
-        self.min_boundary   = ti.Vector.field(3, dtype=ti.f32, shape=(1))
-        self.max_boundary   = ti.Vector.field(3, dtype=ti.f32, shape=(1))
+
+        self.gridCount       = ti.field(dtype=ti.i32)
+        self.grid            = ti.field(dtype=ti.i32)
+        self.neighborCount   = ti.field(dtype=ti.i32)
+        self.maxCurNeighbour = ti.field(dtype=ti.i32)
+        self.neighbor        = ti.field(dtype=ti.i32)
+
+        self.blockSize       = ti.Vector.field(3, dtype=ti.i32, shape=(1))
+        self.min_boundary    = ti.Vector.field(3, dtype=ti.f32, shape=(1))
+        self.max_boundary    = ti.Vector.field(3, dtype=ti.f32, shape=(1))
+
+   
+
+    @ti.pyfunc
+    def setup_grid_gpu(self):
+        ti.root.dense(ti.i, self.particle_data.count).place(self.gridCount)
+        ti.root.dense(ti.ij, (self.particle_data.count, self.maxInGrid)).place(self.grid)
+        ti.root.dense(ti.i,  self.particle_data.count).place(self.maxCurNeighbour)
+
+        ti.root.dense(ti.i, self.particle_data.liquid_count ).place(self.neighborCount)
+        ti.root.dense(ti.ij, (self.particle_data.liquid_count , self.maxNeighbour)).place(self.neighbor)
+
+
+    @ti.pyfunc
+    def setup_grid_cpu(self, maxboundarynp, minboundarynp):
         
-
-
-        self.point_list = []
-
-        self.maxboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-        self.minboundarynp = np.ones(shape=(1,3), dtype=np.float32)
-        for j in range(3):
-            self.maxboundarynp[0, j] = -10000.0
-            self.minboundarynp[0, j] = 10000.0
-
-
-    @ti.pyfunc
-    def add_liquid_point(self, point):
-        self.point_list.append(point)
-        for j in range(3):
-            self.maxboundarynp[0, j] = max(self.maxboundarynp[0, j], point[j])
-            self.minboundarynp[0, j] = min(self.minboundarynp[0, j], point[j])
-        self.count        += 1
-        self.liquid_count += 1
-
-    @ti.pyfunc
-    def add_solid_point(self, point):
-        self.point_list.append(point)
-        for j in range(3):
-            self.maxboundarynp[0, j] = max(self.maxboundarynp[0, j], point[j])
-            self.minboundarynp[0, j] = min(self.minboundarynp[0, j], point[j])
-        self.count        += 1
-        self.solid_count += 1
-
-
-    @ti.pyfunc
-    def add_obj(self, filename):
-        for line in open(filename, "r"):
-            if line.startswith('#'): 
-                continue
-            values = line.split()
-            if not values: continue
-            if values[0] == 'v':
-                v = list(map(float, values[1:4]))
-                self.add_solid_point(v)
-
-    @ti.pyfunc
-    def setup_grid(self):
-        ti.root.dense(ti.i, self.count).place(self.gridCount)
-        ti.root.dense(ti.ij, (self.count, maxInGrid)).place(self.grid)
-        ti.root.dense(ti.i,  self.count).place(self.maxCurNeighbour)
-
-        ti.root.dense(ti.i, self.liquid_count ).place(self.neighborCount)
-        ti.root.dense(ti.ij, (self.liquid_count , maxNeighbour)).place(self.neighbor)
-        #ti.root.dense(ti.i, self.liquid_count ).place(self.maxCurNeighbour)
-
-        ti.root.dense(ti.i, self.count ).place(self.pos)
-
-        self.blocknp   = np.ones(shape=(1,3), dtype=np.int32)
+        blocknp   = np.ones(shape=(1,3), dtype=np.int32)
         for i in range(3):
-            self.blocknp[0, i]    = int((self.maxboundarynp[0, i] - self.minboundarynp[0, i]) / self.gridR + 1)
+            blocknp[0, i]    = int(    (maxboundarynp[0, i] - minboundarynp[0, i]) / self.gridR + 1  )
 
-        self.gridSize     = int(self.blocknp[0, 0]*self.blocknp[0, 1]*self.blocknp[0, 2])
+        self.max_boundary.from_numpy(maxboundarynp)
+        self.min_boundary.from_numpy(minboundarynp)
+        self.blockSize.from_numpy(blocknp)
 
-        self.max_boundary.from_numpy(self.maxboundarynp)
-        self.min_boundary.from_numpy(self.minboundarynp)
-        self.blockSize.from_numpy(self.blocknp)
-        self.pos.from_numpy(np.array(self.point_list, dtype = np.float32))
-        print("grid szie:", self.gridSize, "liqiud particle num:", self.liquid_count, "solid particle num:", self.solid_count)
+        print("serach grid szie:", int(blocknp[0, 0]*blocknp[0, 1]*blocknp[0, 2]))
 
     @ti.kernel
     def update_grid(self):
@@ -104,24 +64,24 @@ class HashGrid:
             self.neighborCount[i] = 0
 
         #insert pos
-        for i in self.pos:
-            indexV         = ti.cast((self.pos[i] - self.min_boundary[0])*self.invGridR, ti.i32)
+        for i in self.particle_data.pos:
+            indexV         = ti.cast((self.particle_data.pos[i] - self.min_boundary[0])*self.invGridR, ti.i32)
             if self.check_in_box(indexV) == 1:
                 hash_index     = self.get_cell_hash(indexV)
                 old = ti.atomic_add(self.gridCount[hash_index] , 1)
-                if old > maxInGrid-1:
+                if old > self.maxInGrid-1:
                     print("exceed grid", old)
-                    self.gridCount[hash_index] = maxInGrid
+                    self.gridCount[hash_index] = self.maxInGrid
                 else:
                     self.grid[hash_index, old] = i
         
         #find neighbour
         for i in self.neighborCount:
-            indexV         = ti.cast((self.pos[i] - self.min_boundary[0])*self.invGridR, ti.i32)
+            indexV         = ti.cast((self.particle_data.pos[i] - self.min_boundary[0])*self.invGridR, ti.i32)
             if self.check_in_box(indexV) == 1:
-                for m in range(-1,2):
-                    for n in range(-1,2):
-                        for q in range(-1,2):
+                for m in range(-2,3):
+                    for n in range(-2,3):
+                        for q in range(-2,3):
                             self.insert_neighbor(i, ti.Vector([m, n, q]) + indexV)
 
 
@@ -136,15 +96,13 @@ class HashGrid:
             while k < self.gridCount[hash_index]:
                 j = self.grid[hash_index, k]
                 if j >= 0 and (i != j):
-                    r = self.pos[i] - self.pos[j]
-                    r_mod = r.norm()
-                    if r_mod < self.searchR:
-                        old = ti.atomic_add(self.neighborCount[i] , 1)
-                        if old > maxNeighbour-1:
-                            old = old
-                            print("exceed neighbor", old)
-                        else:
-                            self.neighbor[i, old] = j
+                    r = self.particle_data.pos[i] - self.particle_data.pos[j]
+                    old = ti.atomic_add(self.neighborCount[i] , 1)
+                    if old > self.maxNeighbour-1:
+                        old = old
+                        print("exceed neighbor", old)
+                    else:
+                        self.neighbor[i, old] = j
                 k += 1
 
     @ti.func
@@ -153,7 +111,7 @@ class HashGrid:
         p2 = 19349663 * a.y
         p3 = 83492791 * a.z
 
-        return ((p1^p2^p3) % self.count  +  self.count ) % self.count  
+        return ((p1^p2^p3) % self.particle_data.count  +  self.particle_data.count ) % self.particle_data.count  
     
 
     @ti.func
@@ -183,12 +141,13 @@ class HashGrid:
                 else:
                     self.maxCurNeighbour[i] = indexj
 
+
     @ti.pyfunc
     def get_max_neighbour(self):
         size = 2
-        while size < self.liquid_count:
+        while size < self.particle_data.liquid_count:
             self.process_neighbour(size)
             size = size*2
 
         print(self.maxCurNeighbour.to_numpy()[0])
-    
+

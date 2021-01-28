@@ -5,8 +5,8 @@ import time
 import math
 import numpy as np
 from Canvas import Canvas
-from HashGrid import HashGrid
-
+#from HashGrid import HashGrid
+from ParticleData import ParticleData
 
 #gui param
 imgSize = 512
@@ -45,7 +45,7 @@ m_l   = 48.0 / (pi*h3)
 vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
 gravity    = ti.Vector([0.0, -9.81, 0.0])
-global hash_grid
+global particle_data
 
 #pressure param
 rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
@@ -60,11 +60,11 @@ viscosity_b   = 0.0
 
 
 def init_particle(filename):
-    global hash_grid
+    global particle_data
     blockSize   = int(boundary * invGridR)
     doublesize  = blockSize*blockSize
     gridSize    = blockSize*blockSize*blockSize
-    hash_grid = HashGrid(gridR)
+    particle_data = ParticleData(gridR)
     
     #y = Ax + B  
     ZxY = particleDimZ*particleDimY
@@ -73,7 +73,7 @@ def init_particle(filename):
     shrink = 1.0
 
     for i in range(particleLiquidNum):
-        hash_grid.add_liquid_point([float(i//ZxY)* gridR,
+        particle_data.add_liquid_point([float(i//ZxY)* gridR,
                                     float((i%ZxY)//particleDimZ)* gridR -0.9 , 
                                     float(i%particleDimZ)* gridR])
 
@@ -83,8 +83,9 @@ def init_particle(filename):
         indexZ      = i%blockSize
         if indexX== 0 or indexY ==0 or indexZ == 0 or\
         indexX == blockSize-1 or indexY ==blockSize-1 or indexZ == blockSize-1 :
-            hash_grid.add_solid_point([(A * float(indexX)  + B) * shrink, (A * float(indexY)  + B) * shrink, (A * float(indexZ)  + B) * shrink])
-    hash_grid.setup_grid()
+            particle_data.add_solid_point([(A * float(indexX)  + B) * shrink, (A * float(indexY)  + B) * shrink, (A * float(indexZ)  + B) * shrink])
+    particle_data.setup_data_gpu()
+    particle_data.setup_data_cpu()
 
 
 
@@ -134,12 +135,12 @@ def reset_param():
 def update_advection_density():
     for i in rho:
         rho[i]           = VL0 *W_norm(0.0)
-        cur_neighbor = hash_grid.neighborCount[i]
+        cur_neighbor = particle_data.hash_grid.neighborCount[i]
         k=0
 
         while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
-            r = hash_grid.pos[i] - hash_grid.pos[j]
+            j = particle_data.hash_grid.neighbor[i, k]
+            r = particle_data.pos[i] - particle_data.pos[j]
             d_den = W(r)
             if j < particleLiquidNum:
                 rho[i] += VL0 * d_den  
@@ -164,12 +165,12 @@ def update_pressure():
 def compute_force():
     for i in d_vel:
         d_vel[i]         = gravity
-        cur_neighbor = hash_grid.neighborCount[i]
+        cur_neighbor = particle_data.hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
-            pi = hash_grid.pos[i]
-            pj = hash_grid.pos[j]
+            j = particle_data.hash_grid.neighbor[i, k]
+            pi = particle_data.pos[i]
+            pj = particle_data.pos[j]
             r = pi - pj
             grad  = gradW(r)
 
@@ -185,21 +186,21 @@ def compute_force():
     
 @ti.kernel
 def integrator_sesph():
-    for i in hash_grid.pos:
+    for i in particle_data.pos:
         if i < particleLiquidNum:
             vel[i]  += d_vel[i]  * deltaT[0]
-            hash_grid.pos[i]  += vel[i]  * deltaT[0]
+            particle_data.pos[i]  += vel[i]  * deltaT[0]
 
     
             
 @ti.kernel
 def draw_particle():
-    for i in hash_grid.pos:
+    for i in particle_data.pos:
         if i < particleLiquidNum:
-            #draw_solid_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
-            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
+            #draw_solid_sphere(particle_data.pos[i], ti.Vector([1.0,1.0,1.0]))
+            sph_canvas.draw_sphere(particle_data.pos[i], ti.Vector([1.0,1.0,1.0]))
         else:
-            sph_canvas.draw_point(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
+            sph_canvas.draw_point(particle_data.pos[i], ti.Vector([0.3,0.3,0.3]))
 
 
             
@@ -212,7 +213,7 @@ reset_param()
 while gui.running:
     sph_canvas.static_cam(0.0,0.0,0.0)
 
-    hash_grid.update_grid()
+    particle_data.hash_grid.update_grid()
 
     update_advection_density()
     update_pressure()

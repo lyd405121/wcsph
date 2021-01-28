@@ -1,4 +1,4 @@
-import sys
+import sys, getopt
 import os
 import taichi as ti
 import time
@@ -6,11 +6,11 @@ import math
 import numpy as np
 from Canvas import Canvas
 
-ti.init(arch=ti.gpu,advanced_optimization=True)
+ti.init(arch=ti.cpu,advanced_optimization=True)
 
 imgSize = 512
 screenRes = ti.Vector([imgSize, imgSize])
-img       = ti.Vector(3, dt=ti.f32, shape=[imgSize,imgSize])
+img       = ti.Vector.field(3, dtype=ti.f32, shape=[imgSize,imgSize])
 depth     = ti.field(dtype=ti.f32, shape=[imgSize,imgSize])
 gui       = ti.GUI('boundry', res=(imgSize,imgSize))
 sph_canvas = Canvas(imgSize, imgSize)
@@ -20,16 +20,16 @@ sph_canvas = Canvas(imgSize, imgSize)
 particleRadius = 0.025
 gridR          = particleRadius / math.sqrt(3.0)
 
-tri_vertices = ti.Vector(3, dt=ti.f32)
-tri_normal   = ti.Vector(3, dt=ti.f32)
+tri_vertices = ti.Vector.field(3, dtype=ti.f32)
+tri_normal   = ti.Vector.field(3, dtype=ti.f32)
 
-init_pos = ti.Vector(3, dt=ti.f32)
-init_cell = ti.Vector(3, dt=ti.i32)
+init_pos = ti.Vector.field(3, dtype=ti.f32)
+init_cell = ti.Vector.field(3, dtype=ti.i32)
 init_id = ti.field(dtype=ti.i32)
 
-possion_sample = ti.Vector(3, dt=ti.f32)
+possion_sample = ti.Vector.field(3, dtype=ti.f32)
 
-phase_group = ti.Vector(3, dt=ti.i32)
+phase_group = ti.Vector.field(3, dtype=ti.i32)
 phase_group_count = ti.field(dtype=ti.i32)
 
 tri_area     = ti.field(dtype=ti.f32)
@@ -68,7 +68,7 @@ global hMap
 class HashMap:
     def __init__(self, n):
         self.count        = n
-        self.cell         = ti.Vector(3, dt=ti.i32)
+        self.cell         = ti.Vector.field(3, dtype=ti.i32)
         self.start_index  = ti.field(dtype=ti.i32)
 
         self.sample_count = ti.field(dtype=ti.i32)
@@ -169,7 +169,7 @@ def loadObj(filename):
     numInitialPoints = (int)(40.0 * (totalArea / circleArea)) 
     padding_num = get_pot_num(numInitialPoints) <<1
     phase_vec_max = numInitialPoints//8
-    hash_map_size = numInitialPoints*2
+    hash_map_size = numInitialPoints*3
 
 
     print("point num:", verticeNum, "tri num:", faceNum, )
@@ -386,8 +386,8 @@ def check_cell(cur_index):
 
 
 @ti.kernel
-def possion_disk_sample(pg: ti.i32, trial: ti.i32):
-    for i in ti.ndrange(phase_group_count[pg]):
+def possion_disk_sample(pg: ti.i32, trial: ti.i32, pg_count: ti.i32):
+    for i in ti.ndrange(pg_count):
         cell = phase_group[pg, i]
         hash_index = (get_cell_hash(cell)  % hash_map_size +  hash_map_size)% hash_map_size
         
@@ -405,15 +405,14 @@ def possion_disk_sample(pg: ti.i32, trial: ti.i32):
                 
                     old = ti.atomic_add(possion_sample_count[0], 1)
                     possion_sample[old] = init_pos[start_index + trial]
-
                         
-
-loadObj("taichi.obj")
+inputfile = "box"
+loadObj(inputfile + ".obj")
 init_point_set()
 gpu_bitonic_sort()
 build_hmap()
 detect_hmap()
-
+phase_group_count_np =  phase_group_count.to_numpy()
 
 possion_sample_count[0] = 0
 trial_times = 0
@@ -424,19 +423,16 @@ trial_total = 10
 
 sph_canvas.set_fov(1.0)
 sph_canvas.set_target(0.0, 1.0, 0.0)
+sph_canvas.set_view_point(sph_canvas.yaw, sph_canvas.pitch, 0.0, 3.0)
+
 
 while gui.running:
-
-    sph_canvas.set_view_point(sph_canvas.yaw, sph_canvas.pitch, 0.0, 3.0)
-
-    if trial_times < trial_total:
-        possion_disk_sample(phase_process, trial_times)
-        print("possion sample trial:", trial_times, "phase:", phase_process, "point num:", possion_sample_count[0])
-        #ti.imwrite(img, str(trial_times*phase_block_size +phase_process)  + ".png")
-        
     sph_canvas.clear_canvas()
     draw_particle()
-    
+    if phase_process == 0 and trial_times == 0:
+        sph_canvas.export_png_frame(0)
+
+
     gui.set_image(sph_canvas.img.to_numpy())
     gui.show()
 
@@ -449,9 +445,16 @@ while gui.running:
     elif trial_times == trial_total:
         print("write obj")
 
-        fo = open("boundry.obj", "w")
+        fo = open(inputfile + "_boundry.obj", "w")
         pos = possion_sample.to_numpy()
         for i in range(possion_sample_count[0]):
             print("v", pos[i, 0], pos[i, 1], pos[i, 2], file = fo)
         fo.close()
         trial_times = 2*trial_times
+
+
+    if trial_times < trial_total:
+        
+        possion_disk_sample(phase_process, trial_times, int(phase_group_count_np[phase_process]))
+        print("possion sample trial:", trial_times, "phase:", phase_process, "point num:", possion_sample_count[0])
+        #sph_canvas.export_png_frame(trial_times*phase_block_size + phase_process)

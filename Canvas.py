@@ -30,7 +30,7 @@ class Canvas:
         self.ortho = 0
 
         self.frame      = 0
-        self.fps      = 20.0
+        self.fps      = 30.0
         
 
 
@@ -128,6 +128,12 @@ class Canvas:
             ti.imwrite(self.img, str(self.frame)  + ".png")
             self.frame+=1
 
+    @ti.pyfunc
+    def export_png_frame(self, frame):
+        if frame > self.frame:
+            self.frame = frame
+            ti.imwrite(self.img, str(self.frame)  + ".png")
+
     @ti.func
     def transform(self, v):
         screenP  = self.proj[0] @ self.view[0] @ ti.Vector([v.x, v.y, v.z, 1.0])
@@ -175,7 +181,7 @@ class Canvas:
     @ti.func
     def draw_point(self, v,c):
         v = self.transform(v)
-        Centre = ti.Vectr([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
+        Centre = ti.Vector([ti.cast(v.x, ti.i32), ti.cast(v.y, ti.i32)])
         self.fill_pixel(Centre, v.z, c)
 
     @ti.func

@@ -6,7 +6,8 @@ import math
 import numpy as np
 
 from Canvas import Canvas
-from HashGrid import HashGrid
+#from HashGrid import HashGrid
+from ParticleData import ParticleData
 
 ti.init(arch=ti.gpu,advanced_optimization=True)
 
@@ -46,12 +47,12 @@ m_l   = 48.0 / (pi*h3)
 
 #advetion param
 gravity    = ti.Vector([0.0, -9.81, 0.0])
-vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-d_vel_pre   = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-pos_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-vel_star    = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-global hash_grid
+vel         = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+d_vel       = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+d_vel_pre   = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+pos_star    = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+vel_star    = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+global particle_data
 
 #pressure param
 rho_err     = ti.field( dtype=ti.f32, shape=(1))
@@ -114,11 +115,11 @@ def GetPciCoff():
     return 1.0 / (beta * (dist_sumgrad*dist_sumgrad  + sumGradW2))
 
 def init_particle(filename):
-    global hash_grid
+    global particle_data
     blockSize   = int(boundary * invGridR)
     doublesize  = blockSize*blockSize
     gridSize    = blockSize*blockSize*blockSize
-    hash_grid = HashGrid(gridR)
+    particle_data = ParticleData(gridR)
     
     #y = Ax + B  
     ZxY = particleDimZ*particleDimY
@@ -127,7 +128,7 @@ def init_particle(filename):
     shrink = 1.0
 
     for i in range(particleLiquidNum):
-        hash_grid.add_liquid_point([float(i//ZxY)* gridR,
+        particle_data.add_liquid_point([float(i//ZxY)* gridR,
                                     float((i%ZxY)//particleDimZ)* gridR -0.9 , 
                                     float(i%particleDimZ)* gridR])
 
@@ -137,8 +138,9 @@ def init_particle(filename):
         indexZ      = i%blockSize
         if indexX== 0 or indexY ==0 or indexZ == 0 or\
         indexX == blockSize-1 or indexY ==blockSize-1 or indexZ == blockSize-1 :
-            hash_grid.add_solid_point([(A * float(indexX)  + B) * shrink, (A * float(indexY)  + B) * shrink, (A * float(indexZ)  + B) * shrink])
-    hash_grid.setup_grid()
+            particle_data.add_solid_point([(A * float(indexX)  + B) * shrink, (A * float(indexY)  + B) * shrink, (A * float(indexZ)  + B) * shrink])
+    particle_data.setup_data_gpu()
+    particle_data.setup_data_cpu()
 
 
 
@@ -200,11 +202,11 @@ def compute_nonpressure_force():
         d_vel[i] = gravity
         rho[i]  = VL0 * W_norm(0.0) * rho_0 
 
-        cur_neighbor     = hash_grid.neighborCount[i]
+        cur_neighbor     = particle_data.hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
-            r = hash_grid.pos[i] - hash_grid.pos[j]
+            j = particle_data.hash_grid.neighbor[i, k]
+            r = particle_data.pos[i] - particle_data.pos[j]
 
             if j < particleLiquidNum:
                 rho[i]     += VL0 * W(r) * rho_0 
@@ -219,7 +221,7 @@ def compute_nonpressure_force():
 def init_iter_info():
     for i in vel_star:
         vel_star[i]  = vel[i]
-        pos_star[i]  = hash_grid.pos[i]
+        pos_star[i]  = particle_data.pos[i]
         pressure[i]  = 0.0
         d_vel_pre[i] = ti.Vector([0.0, 0.0, 0.0])
 
@@ -227,7 +229,7 @@ def init_iter_info():
 def update_iter_info():
     for i in vel_star:
         vel_star[i]  = vel[i] + (d_vel[i]+d_vel_pre[i])  * deltaT[0]
-        pos_star[i]  = hash_grid.pos[i] + vel_star[i]  * deltaT[0]
+        pos_star[i]  = particle_data.pos[i] + vel_star[i]  * deltaT[0]
 
         rho_err[i]   = 0.0
         pressure[i]  = 0.0
@@ -237,11 +239,11 @@ def predict_density():
     for i in rho:
         adv_rho[i] = VL0 * W_norm(0.0)
 
-        cur_neighbor     = hash_grid.neighborCount[i]
+        cur_neighbor     = particle_data.hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
-            r = hash_grid.pos[i] - hash_grid.pos[j]
+            j = particle_data.hash_grid.neighbor[i, k]
+            r = particle_data.pos[i] - particle_data.pos[j]
             WW = W(r)
             if j < particleLiquidNum:
                 adv_rho[i]     += VL0 * WW
@@ -256,13 +258,13 @@ def predict_density():
     for i in d_vel_pre:
         d_vel_pre[i]      = ti.Vector([0.0, 0.0, 0.0])
 
-        cur_neighbor = hash_grid.neighborCount[i]
+        cur_neighbor = particle_data.hash_grid.neighborCount[i]
         k=0
         while k < cur_neighbor:
-            j = hash_grid.neighbor[i, k]
+            j = particle_data.hash_grid.neighbor[i, k]
 
-            pi = hash_grid.pos[i]
-            pj = hash_grid.pos[j]
+            pi = particle_data.pos[i]
+            pj = particle_data.pos[j]
             if j < particleLiquidNum:
                 pj = pos_star[j]
 
@@ -280,15 +282,15 @@ def predict_density():
 def update_pos():
     for i in vel:
         vel[i]  += (d_vel[i]+d_vel_pre[i]) * deltaT[0]
-        hash_grid.pos[i]  += vel[i]  * deltaT[0]
+        particle_data.pos[i]  += vel[i]  * deltaT[0]
 
 @ti.kernel
 def draw_particle():
-    for i in hash_grid.pos:
+    for i in particle_data.pos:
         if i < particleLiquidNum:
-            sph_canvas.draw_sphere(hash_grid.pos[i], ti.Vector([1.0,1.0,1.0]))
+            sph_canvas.draw_sphere(particle_data.pos[i], ti.Vector([1.0,1.0,1.0]))
         else:
-            sph_canvas.draw_point(hash_grid.pos[i], ti.Vector([0.3,0.3,0.3]))
+            sph_canvas.draw_point(particle_data.pos[i], ti.Vector([0.3,0.3,0.3]))
 
 gui = ti.GUI('pcisph', res=(imgSize, imgSize))
 sph_canvas = Canvas(imgSize, imgSize)
@@ -302,7 +304,7 @@ while gui.running:
     #sph_canvas.static_cam(0.0,0.0,0.0)
     sph_canvas.yaw_cam(0.0,0.0,0.0)
 
-    hash_grid.update_grid()
+    particle_data.hash_grid.update_grid()
 
     compute_nonpressure_force()
     sovel_pressure()
@@ -320,8 +322,8 @@ while gui.running:
     current_time += dt
 
     print("time:%.3f"%current_time, "step:%.4f"%dt,  "pressure:", pr_iter)
-    if math.isnan(hash_grid.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
-        print(adv_rho.to_numpy()[test_id], hash_grid.pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
+    if math.isnan(particle_data.pos.to_numpy()[test_id, 0]) or current_time >= total_time:
+        print(adv_rho.to_numpy()[test_id], particle_data.pos.to_numpy()[test_id], d_vel.to_numpy()[test_id])
         sys.exit()
 
 
