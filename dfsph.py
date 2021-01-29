@@ -19,7 +19,7 @@ ti.init(arch=ti.gpu,advanced_optimization=True)
 imgSizeX     = 512
 imgSizeY     = 512
 current_time = 0.0
-total_time   = 1.5
+total_time   = 5.0
 eps          = 1e-5
 test_id      = 0
 
@@ -594,7 +594,7 @@ def draw_particle():
 
 gui = ti.GUI('dfsph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
-init_particle("box_boundry.obj")
+init_particle("model/box_boundry.obj")
 reset_param()
 
 while gui.running:

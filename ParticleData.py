@@ -60,8 +60,8 @@ class ParticleData:
         #viscorcity cg sovler
         self.gravity            = ti.Vector([0.0, -9.81, 0.0])
         self.dim_coff           = 10.0
-        self.viscosity          = 0.1
-        self.viscosity_b        = 0.1
+        self.viscosity          = 10.0
+        self.viscosity_b        = 10.0
         self.viscosity_err      = 0.05
          
         self.avg_density_err    = ti.field( dtype=ti.f32, shape=(1))

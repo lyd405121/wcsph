@@ -8,6 +8,9 @@ from Canvas import Canvas
 #from HashGrid import HashGrid
 from ParticleData import ParticleData
 
+
+ti.init(arch=ti.gpu,advanced_optimization=True)
+
 #gui param
 imgSize = 512
 current_time = 0.0

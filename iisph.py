@@ -408,7 +408,7 @@ def draw_particle():
 
 gui = ti.GUI('iisph', res=(imgSizeX, imgSizeY))
 sph_canvas = Canvas(imgSizeX, imgSizeY)
-init_particle("box_boundry.obj")
+init_particle("model/box_boundry.obj")
 reset_param()
 
 
