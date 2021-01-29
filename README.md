@@ -1,8 +1,8 @@
 # Weakly compressed liqiud simulation
 
-### The code is mainly code transplanted from [SPlisHSPlasH](https://github.com/InteractiveComputerGraphics/SPlisHSPlasH)
+- The code is mainly code transplanted from [SPlisHSPlasH](https://github.com/InteractiveComputerGraphics/SPlisHSPlasH)
 
-### [Taichi](https://github.com/taichi-dev/taichi) programming language
+- The code use [Taichi](https://github.com/taichi-dev/taichi) programming language
 
 ---
 
