@@ -29,15 +29,15 @@
 
 ###  Implicit viscosity solver 
 
-<img src="image/super_nian.gif" width="25%" height="25%" />
+<img src="image/super_nian.gif" width="50%" height="50%" />
 
-<img src="image/rock.gif" width="25%" height="25%" />
+<img src="image/rock.gif" width="50%" height="50%" />
 
 ---
 
 ###  Use precondition cg to solve viscosity:
 
-<img src="image/average_iter_num.png" width="25%" height="25%" />
+<img src="image/average_iter_num.png" width="50%" height="50%" />
 
 ---
 
@@ -51,15 +51,15 @@
 
 - marching cube 
 
-<img src="image/mc.png" width="25%" height="25%" />
+<img src="image/mc.png" width="50%" height="50%" />
 
 - using anistropic kernel to build the volume field
 
-<img src="image/ani-mc.png" width="25%" height="25%" />
+<img src="image/ani-mc.png" width="50%" height="50%" />
 
 - render image
 
-<img src="out/rendering.png" width="25%" height="25%" />
+<img src="out/rendering.png" width="50%" height="50%" />
 ---
 
 ###  Other algorithm:
