@@ -34,7 +34,7 @@ class Canvas:
         
 
 
-    @ti.pyfunc
+    
     def yaw_cam(self, targetx, targety, targetz):
         self.fov = 1.0
         self.ortho = 0
@@ -44,7 +44,7 @@ class Canvas:
         if self.yaw < 3.14:
             self.set_view_point(self.yaw + 0.003, 0.0, 0.0, 3.0)
 
-    @ti.pyfunc
+    
     def pitch_cam(self, targetx, targety, targetz):
         self.fov = 1.0
         self.ortho = 0
@@ -54,7 +54,7 @@ class Canvas:
         if self.pitch < 0.5:
             self.set_view_point(0.0, self.pitch + 0.003, 0.0, 3.0)
 
-    @ti.pyfunc
+    
     def static_cam(self, targetx, targety, targetz):
         self.fov = 2.0
         self.ortho = 1
@@ -63,7 +63,7 @@ class Canvas:
         self.target[2] = targetz
         self.set_view_point(0.0, 0.0, 0.0, 3.0)
 
-    @ti.pyfunc
+    
     def update_cam(self):
         
         self.pitch = min(self.pitch, 1.57)
@@ -85,7 +85,7 @@ class Canvas:
 
 
         view_np = self.view.to_numpy()
-        view_np[0] = ti.np.array([ [xaxis[0], xaxis[1], xaxis[2], -np.dot(xaxis, self.eye)], \
+        view_np[0] = np.array([ [xaxis[0], xaxis[1], xaxis[2], -np.dot(xaxis, self.eye)], \
         [yaxis[0], yaxis[1], yaxis[2], -np.dot(yaxis,self.eye)], \
         [zaxis[0], zaxis[1], zaxis[2], -np.dot(zaxis,self.eye)], [0.0, 0.0, 0.0, 1.0] ])
         self.view.from_numpy(view_np)
@@ -94,13 +94,13 @@ class Canvas:
         proj_np = self.proj.to_numpy()
         
         if self.ortho == 0 :
-            proj_np[0] =  ti.np.array([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, self.far/(self.near-self.far), self.near*self.far/(self.near-self.far)], [0.0, 0.0, -1.0, 0.0] ])
+            proj_np[0] =  np.array([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, self.far/(self.near-self.far), self.near*self.far/(self.near-self.far)], [0.0, 0.0, -1.0, 0.0] ])
         else:
-            proj_np[0] =  ti.np.array([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(self.near-self.far), self.near/(self.near-self.far)], [0.0, 0.0, 0.0, 1.0] ])
+            proj_np[0] =  np.array([ [xScale, 0.0, 0.0, 0.0], [0.0, yScale, 0.0, 0.0], [0.0, 0.0, 1.0/(self.near-self.far), self.near/(self.near-self.far)], [0.0, 0.0, 0.0, 1.0] ])
         self.proj.from_numpy(proj_np)
 
 
-    @ti.pyfunc
+    
     def set_view_point(self, yaw, pitch, roll,scale):
         self.pitch = pitch
         self.yaw = yaw
@@ -108,12 +108,12 @@ class Canvas:
         self.scale = scale
         self.update_cam()
 
-    @ti.pyfunc
+    
     def set_fov(self, fov):
         self.fov = fov
         self.update_cam()
 
-    @ti.pyfunc
+    
     def set_target(self, targetx, targety, targetz):
         self.target[0] = targetx
         self.target[1] = targety
@@ -121,14 +121,14 @@ class Canvas:
         self.update_cam()
 
 
-    @ti.pyfunc
+    
     def export_png(self, time):
         time_i = int(time * self.fps )
         if int(time_i) == self.frame:
             ti.imwrite(self.img, str(self.frame)  + ".png")
             self.frame+=1
 
-    @ti.pyfunc
+    
     def export_png_frame(self, frame):
         if frame > self.frame:
             self.frame = frame

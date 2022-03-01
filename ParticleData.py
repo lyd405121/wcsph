@@ -96,7 +96,7 @@ class ParticleData:
             self.minboundarynp[0, j] = 10000.0
 
 
-    @ti.pyfunc
+    
     def add_liquid_point(self, point):
         '''
         filename = "liqiud.obj"
@@ -116,7 +116,7 @@ class ParticleData:
         self.count        += 1
         self.liquid_count += 1
 
-    @ti.pyfunc
+    
     def add_solid_point(self, point):
         self.point_list.append(point)
         for j in range(3):
@@ -126,7 +126,7 @@ class ParticleData:
         self.solid_count += 1
 
 
-    @ti.pyfunc
+    
     def add_obj(self, filename):
         for line in open(filename, "r"):
             if line.startswith('#'): 
@@ -138,7 +138,7 @@ class ParticleData:
                 self.add_solid_point(v)
 
 
-    @ti.pyfunc
+    
     def setup_data_gpu(self):
 
         ti.root.dense(ti.i, self.count ).place(self.pos)
@@ -176,7 +176,7 @@ class ParticleData:
         self.hash_grid.setup_grid_gpu()
         self.mc_grid.setup_grid_gpu(self.maxboundarynp + self.mc_grid.searchR, self.minboundarynp- self.mc_grid.searchR)
 
-    @ti.pyfunc
+    
     def setup_data_cpu(self):
 
         self.pos.from_numpy(np.array(self.point_list, dtype = np.float32))
@@ -298,7 +298,7 @@ class ParticleData:
         return ret
 
 
-    @ti.pyfunc
+    
     def export_kernel(self):
 
         pos   = self.pos.to_numpy()

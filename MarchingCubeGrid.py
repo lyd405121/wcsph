@@ -53,7 +53,7 @@ class MCGrid:
         self.blocknp         = np.ones(shape=(1,3), dtype=np.int32)
 
 
-    @ti.pyfunc
+    
     def setup_grid_gpu(self, maxboundarynp, minboundarynp):
         
         for i in range(3):
@@ -76,7 +76,7 @@ class MCGrid:
         ti.root.dense(ti.i,  MAX_VERTEX).place(self.triangle)
         ti.root.dense(ti.i,  self.grid_num,).place(self.debug_value)
 
-    @ti.pyfunc
+    
     def setup_grid_cpu(self, maxboundarynp, minboundarynp):
 
         line_index = 0
@@ -102,7 +102,7 @@ class MCGrid:
 
 
 
-    @ti.pyfunc
+    
     def export_vertex(self):
         debug_value = self.debug_value.to_numpy()
         iso_value   = self.surface_value.to_numpy()
@@ -119,7 +119,7 @@ class MCGrid:
                 print ("v %f %f %f %f %f %f" %  (x,y,z, iso_value[i], debug_value[i]/20.0, 1.0), file = fo)
         fo.close()
 
-    @ti.pyfunc
+    
     def export_mesh(self):
         vertex_count = self.vertex_count.to_numpy()
         tri_vertex   = self.triangle.to_numpy()
@@ -135,7 +135,7 @@ class MCGrid:
 
         fo.close()
 
-    @ti.pyfunc
+    
     def export_surface(self, time):
         time_i = int(time * self.fps )
         if int(time_i) == self.frame:

@@ -30,7 +30,7 @@ class HashGrid:
 
    
 
-    @ti.pyfunc
+    
     def setup_grid_gpu(self):
         ti.root.dense(ti.i, self.particle_data.count).place(self.gridCount)
         ti.root.dense(ti.ij, (self.particle_data.count, self.maxInGrid)).place(self.grid)
@@ -40,7 +40,7 @@ class HashGrid:
         ti.root.dense(ti.ij, (self.particle_data.liquid_count , self.maxNeighbour)).place(self.neighbor)
 
 
-    @ti.pyfunc
+    
     def setup_grid_cpu(self, maxboundarynp, minboundarynp):
         
         blocknp   = np.ones(shape=(1,3), dtype=np.int32)
@@ -142,7 +142,7 @@ class HashGrid:
                     self.maxCurNeighbour[i] = indexj
 
 
-    @ti.pyfunc
+    
     def get_max_neighbour(self):
         size = 2
         while size < self.particle_data.liquid_count:

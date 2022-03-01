@@ -17,7 +17,7 @@ current_time = 0.0
 total_time   = 5.0
 eps = 1e-5
 test_id = 1000
-deltaT    = ti.field( dtype=ti.f32, shape=(1))
+
 
 
 #particle param
@@ -45,14 +45,15 @@ m_k   = 8.0  / (pi*h3)
 m_l   = 48.0 / (pi*h3)
 
 #advetion param
-vel         = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
-d_vel       = ti.Vector(3, dt=ti.f32, shape=(particleLiquidNum))
+vel         = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
+d_vel       = ti.Vector.field(3, dtype=ti.f32, shape=(particleLiquidNum))
 gravity    = ti.Vector([0.0, -9.81, 0.0])
 global particle_data
 
 #pressure param
 rho         = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
 pressure    = ti.field( dtype=ti.f32, shape=(particleLiquidNum))
+deltaT    = ti.field( dtype=ti.f32, shape=(1))
 stiffness   = 50000.0
 
 #viscorcity 
