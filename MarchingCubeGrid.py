@@ -80,7 +80,7 @@ class MCGrid:
     def setup_grid_cpu(self, maxboundarynp, minboundarynp):
 
         line_index = 0
-        for line in open("MCdata.txt", "r"):
+        for line in open("MCData.txt", "r"):
 
             if line_index < 32:
                 values = line.split(',', 8)
